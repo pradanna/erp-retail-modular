@@ -1,0 +1,29 @@
+# Environment files (SANGAT PENTING: jangan sampai ter-commit ke git)
+.env
+*.env
+!.env.example
+
+# Go Binaries & build artifacts
+backend/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Node / SvelteKit
+node_modules/
+.svelte-kit/
+build/
+dist/
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs & temp
+*.log
+.npm/
+

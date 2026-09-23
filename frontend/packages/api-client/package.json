@@ -1,0 +1,15 @@
+{
+  "name": "@erp/api-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./auth": "./src/auth.ts",
+    "./client": "./src/client.ts"
+  },
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@erp/types": "*"
+  }
+}

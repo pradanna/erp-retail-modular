@@ -1,0 +1,491 @@
+{
+	"info": {
+		"_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		"name": "ERP Retail Modular — API Collection",
+		"description": "Koleksi API resmi untuk ERP Retail Modular (Backend Go + MySQL). Siap di-import langsung ke Postman, Thunder Client, Bruno, atau Insomnia.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8088",
+			"type": "string"
+		},
+		{
+			"key": "token",
+			"value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoidXNyX2FkbWluXzAxIiwicm9sZSI6InN1cGVyYWRtaW4iLCJsb2NhdGlvbiI6ImxvY19wdXNhdF8wMSIsImV4cCI6MTgyMTI3NTAxNSwiaWF0IjoxNzg5NzM5MDE1fQ.-_HzgV0Z1bvAf8MKM0fJB-ve1264thx9Ez96gOljFBc",
+			"type": "string"
+		},
+		{
+			"key": "categoryId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "productId",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "0. System Health",
+			"item": [
+				{
+					"name": "0.1 Health Check (Publik)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/health",
+							"host": ["{{baseUrl}}"],
+							"path": ["health"]
+						},
+						"description": "Mengetes apakah server Go aktif dan merespon request."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "1. Inventory — Kategori",
+			"item": [
+				{
+					"name": "1.1 Buat Kategori Root (Level 1)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Elektronik & Gadget\",\n  \"parent_id\": null,\n  \"image_url\": \"https://images.unsplash.com/photo-1550009158-9ebf69173e03\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/categories",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "categories"]
+						},
+						"description": "Membuat kategori utama tingkat atas (root). Field parent_id diisi null."
+					},
+					"response": []
+				},
+				{
+					"name": "1.2 Buat Sub-Kategori (Level 2)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Televisi & Home Audio\",\n  \"parent_id\": \"{{categoryId}}\",\n  \"image_url\": \"https://images.unsplash.com/photo-1593359677879-a4bb92f829d1\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/categories",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "categories"]
+						},
+						"description": "Membuat anak kategori dengan mengisi parent_id mengarah ke ID kategori root."
+					},
+					"response": []
+				},
+				{
+					"name": "1.3 Ambil Semua Kategori",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/categories",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "categories"]
+						},
+						"description": "Mengambil seluruh pohon hierarki kategori produk."
+					},
+					"response": []
+				},
+				{
+					"name": "1.4 Perbarui Kategori (PUT)",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"Televisi, Audio & Video (Updated)\",\n  \"parent_id\": null,\n  \"image_url\": \"https://images.unsplash.com/photo-1593359677879-a4bb92f829d1\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/categories/{{categoryId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "categories", "{{categoryId}}"]
+						},
+						"description": "Memperbarui nama atau gambar kategori berdasarkan ID."
+					},
+					"response": []
+				},
+				{
+					"name": "1.5 Hapus Kategori (DELETE)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/categories/{{categoryId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "categories", "{{categoryId}}"]
+						},
+						"description": "Menghapus kategori yang tidak lagi digunakan."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "2. Inventory — Produk",
+			"item": [
+				{
+					"name": "2.1 Buat Produk Baru (Smart TV LG)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"sku\": \"TV-LG-43-UQ7500\",\n  \"category_id\": null,\n  \"name\": \"Smart TV LG 43 Inch 4K UHD WebOS\",\n  \"brand\": \"LG\",\n  \"description\": \"Smart TV dengan prosesor AI α5 Gen5 4K, HDR10 Pro, dan platform WebOS pintar.\",\n  \"unit\": \"unit\",\n  \"purchase_price\": 3850000,\n  \"selling_price\": 4599000,\n  \"is_ppn\": true,\n  \"flag_serial_tracking\": true,\n  \"weight_gram\": 8900,\n  \"atribut_varian\": {\n    \"screen_size\": \"43 inch\",\n    \"resolution\": \"3840 x 2160 (4K UHD)\",\n    \"power_watt\": 110,\n    \"hdmi_ports\": 3,\n    \"usb_ports\": 2\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/products",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "products"]
+						},
+						"description": "Membuat produk baru. Harga disimpan dalam integer rupiah utuh (bukan sen)."
+					},
+					"response": []
+				},
+				{
+					"name": "2.2 Buat Produk Baru (Kulkas Sharp)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"sku\": \"KUL-SHARP-2D-205\",\n  \"category_id\": null,\n  \"name\": \"Kulkas Sharp 2 Pintu Inverter J-Tech 205L\",\n  \"brand\": \"Sharp\",\n  \"description\": \"Kulkas hemat energi dengan teknologi pendinginan higienis Plasmacluster.\",\n  \"unit\": \"unit\",\n  \"purchase_price\": 2700000,\n  \"selling_price\": 3250000,\n  \"is_ppn\": true,\n  \"flag_serial_tracking\": true,\n  \"weight_gram\": 42000,\n  \"atribut_varian\": {\n    \"capacity_liters\": 205,\n    \"color\": \"Dark Silver\",\n    \"defrost\": \"No Frost\",\n    \"power_watt\": 100\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/products",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "products"]
+						},
+						"description": "Membuat master produk kedua untuk pengujian filter dan list."
+					},
+					"response": []
+				},
+				{
+					"name": "2.3 Ambil Daftar Produk (Pagination)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/products?page=1&limit=10",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "products"],
+							"query": [
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "10"
+								}
+							]
+						},
+						"description": "Mengambil daftar master produk dengan pagination."
+					},
+					"response": []
+				},
+				{
+					"name": "2.4 Cari Produk (Search Query)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/products?search=LG&page=1&limit=5",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "products"],
+							"query": [
+								{
+									"key": "search",
+									"value": "LG"
+								},
+								{
+									"key": "page",
+									"value": "1"
+								},
+								{
+									"key": "limit",
+									"value": "5"
+								}
+							]
+						},
+						"description": "Pencarian dinamis pada nama produk atau kode SKU."
+					},
+					"response": []
+				},
+				{
+					"name": "2.5 Filter Produk Berdasarkan Status",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/products?status=active",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "products"],
+							"query": [
+								{
+									"key": "status",
+									"value": "active"
+								}
+							]
+						},
+						"description": "Filter status: active | inactive | discontinued."
+					},
+					"response": []
+				},
+				{
+					"name": "2.6 Detail Produk by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/products/{{productId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "products", "{{productId}}"]
+						},
+						"description": "Mengambil detail lengkap satu produk berdasarkan UUIDv7."
+					},
+					"response": []
+				},
+				{
+					"name": "2.7 Perbarui Data Produk (PUT)",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"category_id\": null,\n  \"name\": \"Smart TV LG 43 Inch 4K UHD WebOS (Promo Merdeka)\",\n  \"brand\": \"LG\",\n  \"description\": \"Smart TV dengan prosesor AI α5 Gen5 4K, garansi resmi 2 tahun panel.\",\n  \"unit\": \"unit\",\n  \"purchase_price\": 3800000,\n  \"selling_price\": 4399000,\n  \"is_ppn\": true,\n  \"flag_serial_tracking\": true,\n  \"weight_gram\": 8900,\n  \"atribut_varian\": {\n    \"screen_size\": \"43 inch\",\n    \"resolution\": \"4K UHD\",\n    \"power_watt\": 110,\n    \"hdmi_ports\": 3,\n    \"bonus\": \"Bracket TV Dinding\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/products/{{productId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "products", "{{productId}}"]
+						},
+						"description": "Update menyeluruh pada produk (nama, harga, deskripsi, spesifikasi)."
+					},
+					"response": []
+				},
+				{
+					"name": "2.8 Ubah Status Produk (PATCH)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"status\": \"inactive\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/products/{{productId}}/status",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "products", "{{productId}}", "status"]
+						},
+						"description": "Ubah status produk secara parsial tanpa harus kirim ulang seluruh field."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "3. Kasus Error (Negative Tests)",
+			"item": [
+				{
+					"name": "3.1 Error — Tanpa Token Auth (401)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/products",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "products"]
+						},
+						"description": "Harus menghasilkan HTTP 401 Unauthorized."
+					},
+					"response": []
+				},
+				{
+					"name": "3.2 Error — Harga Beli Negatif (400)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"sku\": \"TEST-FAIL-01\",\n  \"name\": \"Produk Rusak\",\n  \"unit\": \"pcs\",\n  \"purchase_price\": -50000,\n  \"selling_price\": 100000\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/products",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "products"]
+						},
+						"description": "Validasi domain menolak harga negatif -> HTTP 400 Bad Request."
+					},
+					"response": []
+				},
+				{
+					"name": "3.3 Error — Nama Kategori Kosong (400)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"name\": \"   \",\n  \"parent_id\": null\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/inventory/categories",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "inventory", "categories"]
+						},
+						"description": "Validasi domain menolak nama spasi kosong -> HTTP 400 Bad Request."
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}

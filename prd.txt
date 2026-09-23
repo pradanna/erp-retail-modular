@@ -1,0 +1,214 @@
+# PRD — ERP Retail Modular
+### Studi Kasus Awal: Toko Elektronik
+
+**Versi:** 1.1 (Draft — revisi setelah breakdown domain Inventory & Purchasing)
+**Status:** Untuk validasi sebelum masuk implementasi detail per modul
+
+---
+
+## 1. Latar Belakang & Visi Produk
+
+Produk ini adalah sistem ERP retail yang **modular** dan **dijual per instalasi** (single-tenant per toko), bukan SaaS multi-tenant. Setiap toko yang membeli mendapat instalasi sendiri, dengan modul-modul yang bisa **diaktifkan (unlock) sesuai lisensi** yang dibeli.
+
+Meskipun studi kasus pertama adalah **toko elektronik** (kulkas, TV, dan produk elektronik lain), sistem dirancang **generic untuk kebutuhan retail secara umum**. Karakteristik toko elektronik — barang bergaransi ganda (toko & pabrik), per-unit serial number/IMEI, nilai transaksi tinggi, skema komisi salesman — dipakai untuk menguji apakah model data cukup fleksibel untuk retail vertikal lain di masa depan.
+
+**Prinsip desain utama:** modularitas di level kode (bounded context per modul) dan di level bisnis (fitur bisa di-unlock/dimatikan), tanpa mengorbankan kemudahan maintenance untuk tim kecil/solo developer.
+
+---
+
+## 2. Ruang Lingkup Modul (MVP)
+
+| Modul | Fungsi Utama | Wajib di MVP |
+|---|---|---|
+| **Inventory** | Manajemen produk, stok per cabang, transfer antar cabang, serial number | Ya |
+| **Purchasing** | Pembelian ke supplier, approval PO, penerimaan barang | Ya |
+| **Sales** | Transaksi penjualan (POS & sales order), retur | Ya |
+| **Finance** | Jurnal otomatis dari transaksi, piutang, hutang | Ya |
+| **Ecommerce** | Storefront publik, order online | Ya |
+| **Commission** | Perhitungan bonus salesman | Ya (tapi harus tetap bisa dimatikan) |
+
+Semua modul bersifat **unlockable** — instalasi tertentu bisa saja hanya mengaktifkan sebagian modul, tergantung lisensi yang dibeli toko tersebut. **Payment gateway online (Midtrans/Xendit) sengaja tidak masuk scope MVP** — pembayaran storefront untuk versi awal masih manual/offline; integrasi payment gateway ditangani sebagai `PaymentGateway` interface di infrastructure layer modul Sales/Ecommerce kelak, tanpa mengubah domain.
+
+---
+
+## 3. Konteks Bisnis: Multi-Cabang
+
+- **Harga jual bersifat global** di seluruh cabang.
+- **Promo/diskon per-cabang**, strict: maksimal **satu promo aktif** per kombinasi (produk, cabang).
+- **Staff/kasir dapat di-assign ke lebih dari satu cabang** (many-to-many antara user dan cabang). Konsep ini juga dipakai untuk mendefinisikan "admin gudang" — bukan role terpisah, melainkan role Admin yang di-assign ke Location gudang tertentu.
+- **Transfer stok antar cabang wajib approval** — Admin request, Superadmin/Owner approve.
+- **Gudang storefront online diperlakukan sebagai "cabang virtual"** (Location bertipe `online`), sejajar secara struktural dengan cabang fisik.
+
+---
+
+## 4. Peran, Approval, & Keamanan Aksi Sensitif
+
+### 4.1 Role
+
+| Role | Hak Akses Kunci |
+|---|---|
+| **Admin** | Operasional harian per cabang; request transfer stok & PO; **tidak bisa** approve |
+| **Admin Gudang** | Admin yang di-assign ke Location gudang tertentu; melakukan konfirmasi penerimaan barang (goods receipt) di gudang tersebut |
+| **Superadmin** | Approve transfer stok & PurchaseOrder; visibility penuh atas seluruh aktivitas (termasuk penerimaan barang), tanpa melakukan penerimaan itu sendiri |
+| **Owner** | Sama seperti Superadmin — approve, visibility penuh lintas cabang |
+
+### 4.2 Audit Log (selalu aktif, tidak bisa dimatikan)
+
+Sistem mencatat **siapa melakukan apa** untuk seluruh aksi penting lintas modul — bukan fitur yang bisa dimatikan, ini fondasi akuntabilitas:
+- Siapa approve transfer stok
+- Siapa approve PurchaseOrder
+- Siapa melakukan penerimaan barang
+- Siapa membuat/mengubah promo harga
+- Siapa memproses pencairan komisi
+
+Log ini diisi dengan cara subscribe ke event-event penting yang di-publish tiap modul lewat event bus — bukan ditulis manual satu-satu di tiap modul. Superadmin/Owner bisa melihat log ini kapan saja (read-only).
+
+### 4.3 Step-up Authentication (dapat dimatikan)
+
+Untuk aksi kritikal (approve transfer stok, approve PO, konfirmasi goods receipt — kandidat lain: ubah promo, payout komisi), sistem meminta **konfirmasi ulang password** sebelum aksi dieksekusi:
+- Divalidasi di **FE (modal konfirmasi)** dan **BE (re-verifikasi wajib di endpoint)** — keduanya, supaya tidak bisa di-bypass lewat pemanggilan API langsung.
+- **Berbeda dari mekanisme unlock modul (lisensi).** Ini adalah preferensi keamanan operasional toko, diatur lewat `Settings` yang bisa diubah kapan saja oleh Superadmin/Owner — bukan konfigurasi lisensi yang butuh redeploy.
+- Saat dimatikan, **AuditLog tetap berjalan seperti biasa** — yang dimatikan hanya lapisan konfirmasi password tambahan, bukan pencatatannya.
+
+---
+
+## 5. Kebutuhan Fungsional per Modul
+
+### 5.1 Inventory
+
+**Master Produk** — field final:
+
+| Field | Keterangan |
+|---|---|
+| `id` | UUIDv7 |
+| `sku` | Kode internal unik, ditentukan toko sendiri |
+| `category_id` | Merujuk ke kategori level 2 (lihat struktur kategori di bawah) |
+| `name`, `brand`, `description` | Data deskriptif |
+| `unit` | Satuan jual |
+| `purchase_price`, `selling_price` | Harga beli & jual, global di semua cabang |
+| `status` | Aktif / nonaktif / discontinued |
+| `is_ppn` | Boolean, default `true` — penanda kena pajak (harga tetap tax-inclusive) |
+| `flag_serial_tracking` | Boolean — apakah produk ini dilacak per unit (serial/IMEI) |
+| `weight_kg`, `dimensions` | Untuk kebutuhan ongkir storefront |
+| `atribut_varian` | Object generic (warna, kapasitas, dll) — bukan kolom khusus per kategori |
+
+**Dipisah jadi entity/tabel sendiri (one-to-many dari Product):**
+- `ProductBarcode` — satu produk bisa punya lebih dari satu barcode (beda dari `sku`: barcode dicetak pabrik dan formatnya di luar kendali toko, sedangkan SKU adalah kode internal yang ditentukan toko sendiri)
+- `ProductImage` — foto produk
+- `ProductWarranty` (join ke master `WarrantyPolicy`) — maksimal 1 `WarrantyPolicy` aktif per `type` (toko/pabrik) per produk, meniru pola invariant yang sama dengan `PriceOverride`
+
+**Dipindah kepemilikannya ke modul lain:**
+- Relasi ke Supplier — sepenuhnya milik modul **Purchasing**, Inventory tidak menyimpan referensi supplier di Product
+- `minimum_stock` — bukan di Product, tapi di `StockItem` (per kombinasi produk+cabang, karena reorder point wajar berbeda antar cabang)
+
+**Kategori** — hierarkis 2 level (Level 1 → Level 2), tidak lebih dalam dari itu:
+- `Product.category_id` mengarah ke kategori level 2 (paling spesifik)
+- Pencarian/filter di level 1 tetap didukung: query mencari semua kategori level 2 di bawah level 1 tersebut, baru mengambil produknya
+- Invariant: kategori level 2 tidak boleh punya anak (tidak ada level 3)
+
+**Entity lain di modul ini:**
+- `Location` (type: `physical` / `online`)
+- `StockItem` (per Product + Location: quantity tersedia, quantity reserved, minimum_stock)
+- `SerialUnit` (opsional, hanya untuk produk dengan `flag_serial_tracking = true`; status: tersedia/terjual/retur)
+- `StockTransfer` (status: `pending_approval` → `approved` → `in_transit` → `received`; approve khusus Superadmin/Owner)
+- `PriceOverride` (promo per produk+cabang, strict satu aktif per kombinasi)
+- `WarrantyPolicy` (master: nama, durasi bulan, type toko/pabrik)
+
+### 5.2 Purchasing (modul baru)
+
+- Master **`Supplier`** — kepemilikan penuh relasi produk↔supplier (termasuk histori harga beli) ada di modul ini, bukan di Inventory
+- **`PurchaseOrder`** (aggregate) — alur status: `draft → pending_approval → approved → ordered → received`, dengan cabang `rejected` jika ditolak. Approval wajib (Admin request, Superadmin/Owner approve) karena nilai barang elektronik besar
+- **Penerimaan barang (Goods Receipt)** — MVP hanya mendukung **full receipt (100%)**, bukan partial/cicilan penerimaan (ditunda pasca-MVP). Dilakukan oleh **Admin Gudang** (Admin yang di-assign ke Location tujuan); Superadmin/Owner hanya melihat, tidak melakukan penerimaan
+- Event yang dipublish setelah barang diterima:
+  ```
+  GoodsReceived { PurchaseOrderID, LocationID, Items, ReceivedBy }
+      → Inventory : tambah stok (StockItem)
+      → Finance   : catat hutang/payable ke supplier
+  ```
+
+### 5.3 Sales
+
+- Transaksi POS di outlet (kasir memilih Location tempat transaksi terjadi)
+- Sales order untuk skema kredit/cicilan (umum di penjualan elektronik bernilai tinggi)
+- Retur penjualan
+- Order bisa dikaitkan ke salesman (opsional)
+- Setelah pembayaran dikonfirmasi, terbit event `OrderPaid { OrderID, LocationID, SalesmanID?, Items, Total }`
+
+### 5.4 Finance
+
+- Jurnal otomatis dari event `OrderPaid` (piutang untuk transaksi kredit) dan dari event `GoodsReceived` (hutang ke supplier) — bukan input manual duplikat
+- Laporan keuangan per cabang & konsolidasi seluruh cabang
+- Pencatatan kas masuk/keluar non-transaksi
+- *(Di luar scope MVP: general ledger/COA custom penuh — MVP baru sebatas jurnal dasar + piutang + hutang)*
+
+### 5.5 Ecommerce
+
+- Storefront publik menampilkan produk dari Inventory, sumber stok dari Location bertipe `online`
+- Order dari storefront otomatis dibuat sebagai `Sales Order` dengan Location = gudang online
+- Pembayaran online: **di luar scope MVP** (lihat bagian 2)
+
+### 5.6 Commission
+
+- Master salesman terhubung ke user/staff yang sudah ada
+- Skema komisi fleksibel namun **terstruktur di database** untuk MVP (bukan rule-engine dinamis)
+- Akrual bonus otomatis dari event `OrderPaid`, terkait `SalesmanID`
+- Rekap periodik (bulanan) untuk pencairan; modul ini harus bisa dimatikan sepenuhnya tanpa mempengaruhi jalannya Sales
+
+---
+
+## 6. Alur Event Antar Modul (Ringkasan)
+
+```
+Order dibayar (Sales)
+   → OrderPaid { OrderID, LocationID, SalesmanID?, Items, Total }
+       → Inventory   : kurangi stok / lepas reservasi
+       → Finance     : buat jurnal + piutang jika kredit
+       → Commission  : hitung akrual bonus (jika modul aktif & SalesmanID ada)
+
+Barang diterima (Purchasing)
+   → GoodsReceived { PurchaseOrderID, LocationID, Items, ReceivedBy }
+       → Inventory   : tambah stok
+       → Finance     : catat hutang ke supplier
+
+Aksi kritikal apapun (approve transfer, approve PO, goods receipt, dst.)
+   → dicatat AuditLog (shared, selalu aktif)
+   → jika Settings.require_reauth aktif: wajib konfirmasi ulang password (FE + BE)
+```
+
+Prinsip: modul yang tidak di-unlock tidak subscribe ke event apapun — sistem tetap berjalan normal tanpa modul tersebut.
+
+---
+
+## 7. Ringkasan Arsitektur Teknis
+
+- **Backend:** Go, modular monolith — satu binary/deploy per instalasi, boundary ketat per modul (domain/application/infrastructure/interfaces + `module.go` facade). Komunikasi antar modul: interface publik (sinkron) + event bus in-process (asinkron). Tabel per-modul, tanpa FK lintas modul. **Standar ID: UUIDv7** di seluruh aggregate (urut secara alami, ramah index, tidak sequential-tertebak seperti auto-increment).
+- **Lisensi & unlock modul:** dibaca saat startup; modul nonaktif tidak di-mount ke router maupun event bus.
+- **Cross-cutting shared:** `shared/audit` (audit log, selalu aktif), `shared/settings` (toggle operasional seperti step-up auth), `shared/auth`, `shared/license`, `shared/event`.
+- **Frontend:** SvelteKit monorepo, 2 app (`backoffice` SPA, `storefront` SSR), berbagi `ui`/`api-client`/`types`. TypeScript strict (tanpa `any`), Tailwind v4 (tema biru, clean & modern), ESLint+Prettier zero-warning, governance komponen wajib cek `/packages/ui/COMPONENTS.md` sebelum membuat komponen baru. Detail lengkap ada di skill `erp-modular-architecture`.
+
+---
+
+## 8. Di Luar Ruang Lingkup (Out of Scope — MVP)
+
+- Payment gateway online (Midtrans/Xendit) — storefront checkout manual/offline dulu
+- Partial/cicilan penerimaan barang (goods receipt) — MVP full receipt saja
+- Fitur cicilan/kredit yang lebih kompleks di sisi Purchasing
+- HRIS/payroll penuh
+- Multi-currency
+- Integrasi marketplace pihak ketiga
+- General ledger/accounting custom yang lengkap
+- Rule-engine dinamis untuk skema komisi
+
+---
+
+## 9. Open Items (Belum Diputuskan)
+
+1. **Apakah semua produk kena tarif PPN yang sama** (11% flat) — perlu dikonfirmasi tidak ada produk dengan pengecualian pajak
+2. **Cakupan step-up authentication** — apakah juga berlaku untuk perubahan `PriceOverride` dan `CommissionPayout`, atau cukup untuk transfer stok/PO/goods receipt saja
+3. Detail struktur `CommissionRule` — kombinasi kategori produk dan/atau target omzet
+
+---
+
+## 10. Langkah Berikutnya
+
+Domain model modul **Inventory** (Product, Category, WarrantyPolicy) sudah dibreakdown melalui sesi brainstorm dan siap masuk tahap desain skema database. Modul **Purchasing** sudah punya kerangka aggregate (Supplier, PurchaseOrder, GoodsReceipt) namun belum dibreakdown detail field-nya — ini kandidat sesi berikutnya, sebelum masuk ke Sales dan Finance yang bergantung pada kontrak event dari kedua modul ini.

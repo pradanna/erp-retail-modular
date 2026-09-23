@@ -1,0 +1,14 @@
+{
+  "name": "erp-retail-frontend",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:backoffice": "npm run dev --workspace=apps/backoffice",
+    "build:backoffice": "npm run build --workspace=apps/backoffice",
+    "lint": "npm run lint --workspaces --if-present",
+    "format": "prettier --write ."
+  }
+}

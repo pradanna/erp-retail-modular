@@ -1,0 +1,2445 @@
+openapi: 3.0.3
+info:
+  title: ERP Retail Modular — API Specification
+  version: 1.0.0
+  description: |
+    Spesifikasi OpenAPI resmi untuk sistem ERP Retail Modular (Backend Go + MySQL).
+    Modul aktif: **Inventory**.
+    Semua aggregate ID menggunakan format **UUIDv7**.
+servers:
+  - url: http://localhost:8088
+    description: Development Server Local
+
+tags:
+  - name: System
+    description: Health check dan status server
+  - name: Inventory - Categories
+    description: Manajemen pohon kategori produk (Level 1 & Level 2)
+  - name: Inventory - Products
+    description: Master produk retail, harga, PPN, varian dinamis, dan status
+  - name: Inventory - Locations
+    description: Master lokasi cabang fisik dan gudang virtual (storefront online)
+  - name: Inventory - Stocks
+    description: Manajemen stok per cabang, stock opname, reservasi, dan alert low stock
+  - name: Inventory - Barcodes
+    description: Multi-barcode pabrik per produk dan pencarian scan kasir
+  - name: Inventory - Serial Units
+    description: Tracking nomor seri dan IMEI unik per unit fisik untuk elektronik & gadget
+  - name: Inventory - Price Overrides
+    description: Promo harga khusus cabang dan kalkulasi harga efektif kasir POS (effective price)
+  - name: Inventory - Stock Transfers
+    description: Permohonan mutasi stok antar cabang (surat jalan), approval, ekspedisi pengiriman (in transit), dan konfirmasi penerimaan barang
+  - name: Inventory - Warranties
+    description: Master kebijakan garansi toko dan garansi resmi pabrik, serta penetapan garansi produk
+
+paths:
+  /health:
+    get:
+      tags:
+        - System
+      summary: Server Health Check
+      description: Endpoint publik tanpa autentikasi untuk memverifikasi server aktif.
+      responses:
+        '200':
+          description: Server berjalan normal
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  version:
+                    type: string
+                    example: 0.1.0
+
+  /api/v1/inventory/categories:
+    post:
+      tags:
+        - Inventory - Categories
+      summary: Buat Kategori Baru
+      description: Membuat kategori utama (parent_id = null) atau sub-kategori.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCategoryRequest'
+      responses:
+        '201':
+          description: Kategori berhasil dibuat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryResponse'
+        '400':
+          description: Input tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token tidak valid atau tidak disertakan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Inventory - Categories
+      summary: Ambil Daftar Seluruh Kategori
+      description: Mengambil seluruh pohon kategori yang tersimpan di database.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Daftar kategori berhasil diambil
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CategoryResponse'
+        '401':
+          description: Token tidak valid
+
+  /api/v1/inventory/categories/{id}:
+    put:
+      tags:
+        - Inventory - Categories
+      summary: Perbarui Data Kategori
+      description: Mengubah nama atau gambar kategori.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Kategori (UUIDv7)
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCategoryRequest'
+      responses:
+        '200':
+          description: Kategori berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryResponse'
+        '404':
+          description: Kategori tidak ditemukan
+        '400':
+          description: Data input tidak valid
+
+    delete:
+      tags:
+        - Inventory - Categories
+      summary: Hapus Kategori
+      description: Menghapus kategori berdasarkan ID.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Kategori (UUIDv7)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Kategori berhasil dihapus
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Kategori berhasil dihapus
+        '404':
+          description: Kategori tidak ditemukan
+
+  /api/v1/inventory/products:
+    post:
+      tags:
+        - Inventory - Products
+      summary: Buat Master Produk Baru
+      description: Membuat produk baru. Harga disimpan dalam satuan integer Rupiah utuh.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProductRequest'
+      responses:
+        '201':
+          description: Produk berhasil dibuat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateProductResponse'
+        '400':
+          description: Validasi gagal (misal SKU duplikat atau harga negatif)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Inventory - Products
+      summary: Daftar Produk dengan Filter & Pagination
+      description: Mengambil daftar produk dengan filter status, kategori, pencarian, dan halaman.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: search
+          in: query
+          description: Cari berdasarkan Nama Produk atau SKU
+          schema:
+            type: string
+        - name: category_id
+          in: query
+          description: Filter berdasarkan ID Kategori
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filter status produk
+          schema:
+            type: string
+            enum: [active, inactive, discontinued]
+        - name: page
+          in: query
+          description: Nomor halaman (default 1)
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          description: Jumlah item per halaman (default 10)
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Daftar produk berhasil diambil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListProductResponse'
+
+  /api/v1/inventory/products/{id}:
+    get:
+      tags:
+        - Inventory - Products
+      summary: Detail Satu Produk
+      description: Mengambil detail lengkap satu produk berdasarkan ID UUIDv7.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Detail produk ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductResponse'
+        '404':
+          description: Produk tidak ditemukan
+
+    put:
+      tags:
+        - Inventory - Products
+      summary: Perbarui Data Produk (Full Update)
+      description: Memperbarui seluruh data produk (kecuali SKU dan CategoryID demi audit log).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProductRequest'
+      responses:
+        '200':
+          description: Produk berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductResponse'
+        '404':
+          description: Produk tidak ditemukan
+
+  /api/v1/inventory/products/{id}/status:
+    patch:
+      tags:
+        - Inventory - Products
+      summary: Ubah Status Produk (Partial Update)
+      description: Mengubah status produk menjadi active, inactive, atau discontinued.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetProductStatusRequest'
+      responses:
+        '200':
+          description: Status berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  status:
+                    type: string
+                  message:
+                    type: string
+                    example: status produk berhasil diubah
+
+  /api/v1/inventory/locations:
+    post:
+      tags:
+        - Inventory - Locations
+      summary: Buat Lokasi Cabang / Gudang Baru
+      description: Mendaftarkan cabang fisik baru atau gudang storefront online.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLocationRequest'
+      responses:
+        '201':
+          description: Lokasi cabang berhasil dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    example: 018f0a00-0000-7000-0000-000000000001
+                  message:
+                    type: string
+                    example: Lokasi cabang berhasil dibuat
+        '400':
+          description: Input tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Kode lokasi sudah digunakan (Duplikat)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Inventory - Locations
+      summary: Daftar Seluruh Lokasi
+      description: Mengambil daftar lokasi/cabang.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: active_only
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Jika true, hanya menampilkan cabang yang berstatus aktif
+      responses:
+        '200':
+          description: Daftar lokasi berhasil diambil
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LocationResponse'
+
+  /api/v1/inventory/locations/{id}:
+    get:
+      tags:
+        - Inventory - Locations
+      summary: Detail Lokasi
+      description: Mengambil data lengkap 1 lokasi berdasarkan ID (UUIDv7).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Detail lokasi ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocationResponse'
+        '404':
+          description: Lokasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    put:
+      tags:
+        - Inventory - Locations
+      summary: Perbarui Informasi Lokasi
+      description: Mengubah nama dan alamat cabang. Kode dan Tipe tidak dapat diubah sembarangan demi konsistensi data.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLocationRequest'
+      responses:
+        '200':
+          description: Informasi lokasi berhasil diperbarui
+        '400':
+          description: Input tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Lokasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Inventory - Locations
+      summary: Hapus Lokasi (Hard Delete)
+      description: Menghapus lokasi fisik dari sistem. Hanya diizinkan jika lokasi belum memiliki data stok barang atau transaksi terkait (ON DELETE RESTRICT).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Lokasi berhasil dihapus
+        '404':
+          description: Lokasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Gagal dihapus karena masih memiliki relasi stok/transaksi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/locations/{id}/status:
+    patch:
+      tags:
+        - Inventory - Locations
+      summary: Ubah Status Aktif Lokasi (Deaktivasi / Soft Delete)
+      description: Mengaktifkan atau menonaktifkan operasional cabang.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetLocationStatusRequest'
+      responses:
+        '200':
+          description: Status operasional lokasi berhasil diubah
+        '404':
+          description: Lokasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/stocks/adjust:
+    post:
+      tags:
+        - Inventory - Stocks
+      summary: Penyesuaian Stok (Stock Opname)
+      description: Mengubah kuantitas stok fisik dengan penguncian baris atomik (SELECT ... FOR UPDATE) untuk mencegah race condition.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdjustStockRequest'
+      responses:
+        '200':
+          description: Stok berhasil disesuaikan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockResponse'
+        '400':
+          description: Input tidak valid atau kuantitas di bawah reservasi aktif
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Produk atau lokasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/stocks/min-stock:
+    put:
+      tags:
+        - Inventory - Stocks
+      summary: Update Batas Minimum Stok
+      description: Memperbarui ambang batas peringatan stok menipis (min_stock) pada produk di cabang tertentu.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateMinStockRequest'
+      responses:
+        '200':
+          description: Batas minimum stok berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockResponse'
+        '400':
+          description: Min stock tidak boleh negatif
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Produk atau lokasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/stocks:
+    get:
+      tags:
+        - Inventory - Stocks
+      summary: Ambil Stok Produk atau Daftar Stok Cabang
+      description: |
+        Jika parameter `product_id` dan `location_id` disertakan, mengembalikan status stok 1 produk spesifik.
+        Jika hanya `location_id` disertakan, mengembalikan seluruh daftar stok produk di cabang tersebut.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: location_id
+          in: query
+          required: true
+          description: ID cabang/lokasi
+          schema:
+            type: string
+            example: 018f0a00-0000-7000-0000-000000000001
+        - name: product_id
+          in: query
+          required: false
+          description: ID produk (opsional jika ingin melihat 1 produk saja)
+          schema:
+            type: string
+            example: 01956e18-648b-7341-949f-93dca6094628
+      responses:
+        '200':
+          description: Data stok berhasil diambil
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/StockResponse'
+                  - type: array
+                    items:
+                      $ref: '#/components/schemas/StockResponse'
+        '400':
+          description: Parameter location_id tidak disertakan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Lokasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/stocks/alerts:
+    get:
+      tags:
+        - Inventory - Stocks
+      summary: Daftar Peringatan Stok Menipis (Low Stock Alerts)
+      description: Mengambil daftar barang yang stok fisiknya sudah mencapai atau berada di bawah ambang batas `min_stock`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: location_id
+          in: query
+          required: false
+          description: Filter cabang tertentu (jika dikosongkan akan mengambil dari seluruh cabang)
+          schema:
+            type: string
+            example: 018f0a00-0000-7000-0000-000000000001
+      responses:
+        '200':
+          description: Daftar low stock alerts berhasil diambil
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StockResponse'
+
+  /api/v1/inventory/products/{id}/barcodes:
+    post:
+      tags:
+        - Inventory - Barcodes
+      summary: Tambah Barcode ke Produk
+      description: Mendaftarkan barcode fisik internasional (EAN-13, UPC, Code 128) ke produk.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+            example: 01956e18-648b-7341-949f-93dca6094628
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddBarcodeRequest'
+      responses:
+        '201':
+          description: Barcode berhasil ditambahkan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BarcodeResponse'
+        '400':
+          description: Format barcode tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Produk tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Barcode sudah digunakan oleh produk lain
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Inventory - Barcodes
+      summary: Ambil Daftar Barcode Milik Produk
+      description: Mengambil seluruh barcode pabrik yang terdaftar pada produk tertentu.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+            example: 01956e18-648b-7341-949f-93dca6094628
+      responses:
+        '200':
+          description: Daftar barcode berhasil diambil
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BarcodeResponse'
+        '404':
+          description: Produk tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/products/{id}/barcodes/{barcode_id}:
+    delete:
+      tags:
+        - Inventory - Barcodes
+      summary: Hapus Barcode dari Produk
+      description: Menghapus satu barcode pabrik dari produk.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+            example: 01956e18-648b-7341-949f-93dca6094628
+        - name: barcode_id
+          in: path
+          required: true
+          description: ID Barcode (UUIDv7)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Barcode berhasil dihapus
+        '404':
+          description: Barcode tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/barcodes/lookup:
+    get:
+      tags:
+        - Inventory - Barcodes
+      summary: Scan Barcode Kasir (Lookup Produk by Barcode)
+      description: Menemukan data produk lengkap dan harga jual berdasarkan hasil scan barcode kardus kemasan.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          description: Kode barcode yang ditembak laser pemindai
+          schema:
+            type: string
+            example: '8806091234567'
+      responses:
+        '200':
+          description: Produk berhasil ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductLookupResponse'
+        '400':
+          description: Parameter code wajib diisi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Produk dengan barcode tersebut tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/products/{id}/serials:
+    post:
+      tags:
+        - Inventory - Serial Units
+      summary: Daftarkan Nomor Seri / IMEI Unit Fisik
+      description: Mendaftarkan satu atau banyak unit serial/IMEI fisik saat produk elektronik tiba di gudang atau cabang.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+            example: 01956e18-648b-7341-949f-93dca6094628
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterSerialUnitsRequest'
+      responses:
+        '201':
+          description: Unit fisik berhasil didaftarkan
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SerialUnitResponse'
+        '400':
+          description: Request tidak valid atau produk tidak mengaktifkan flag_serial_tracking
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Nomor seri sudah terdaftar di sistem
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Inventory - Serial Units
+      summary: Ambil Daftar Serial Unit Milik Produk
+      description: Mengambil seluruh unit fisik berserial milik suatu produk dengan filter status opsional.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+            example: 01956e18-648b-7341-949f-93dca6094628
+        - name: status
+          in: query
+          required: false
+          description: Filter status unit (tersedia, terjual, retur)
+          schema:
+            type: string
+            enum: [tersedia, terjual, retur]
+            example: tersedia
+      responses:
+        '200':
+          description: Daftar unit fisik berhasil diambil
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SerialUnitResponse'
+        '404':
+          description: Produk tidak ditemukan
+
+  /api/v1/inventory/serials/lookup:
+    get:
+      tags:
+        - Inventory - Serial Units
+      summary: Scan Serial Number / IMEI (Lookup Kasir & Garansi)
+      description: Menemukan detail unit fisik, nama produk, SKU, dan lokasi cabang berdasarkan hasil scan barcode S/N atau IMEI.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: sn
+          in: query
+          required: true
+          description: Nomor seri / IMEI yang di-scan atau diketik
+          schema:
+            type: string
+            example: 'SN-SAMSUNG-S24-001'
+      responses:
+        '200':
+          description: Unit fisik ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SerialUnitLookupResponse'
+        '404':
+          description: Unit fisik dengan nomor seri tersebut tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/serials/{id}/status:
+    patch:
+      tags:
+        - Inventory - Serial Units
+      summary: Ubah Status Serial Unit (Jual / Retur)
+      description: Memperbarui status siklus hidup unit (misalnya saat kasir menjual unit, status diubah menjadi terjual).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Serial Unit (UUIDv7)
+          schema:
+            type: string
+            example: 01956e22-3344-7555-8666-777788889999
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSerialStatusRequest'
+      responses:
+        '200':
+          description: Status unit berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SerialUnitResponse'
+        '422':
+          description: Transisi status melanggar aturan state machine domain
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/products/{id}/price-overrides:
+    post:
+      tags:
+        - Inventory - Price Overrides
+      summary: Daftarkan Promo / Harga Khusus Cabang Baru
+      description: |
+        Menetapkan harga promo untuk produk di cabang tertentu dalam rentang tanggal tertentu.
+        Invariant: Dalam 1 rentang waktu yang sama, sebuah produk di cabang yang sama hanya boleh memiliki 1 promo aktif (anti-overlap).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+            example: 01956e18-648b-7341-949f-93dca6094628
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePriceOverrideRequest'
+      responses:
+        '201':
+          description: Promo harga berhasil didaftarkan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceOverrideResponse'
+        '400':
+          description: Validasi gagal (misal harga <= 0 atau end_date <= start_date)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Produk atau lokasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Promo bertabrakan (overlap) dengan promo aktif lain pada cabang yang sama
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Inventory - Price Overrides
+      summary: Daftar Riwayat & Promo Harga Milik Produk
+      description: Mengambil seluruh promo harga untuk suatu produk, opsional difilter per lokasi cabang.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+            example: 01956e18-648b-7341-949f-93dca6094628
+        - name: location_id
+          in: query
+          required: false
+          description: Filter berdasarkan ID Lokasi / Cabang
+          schema:
+            type: string
+            example: 018f0a00-0000-7000-0000-000000000001
+      responses:
+        '200':
+          description: Daftar promo harga produk
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PriceOverrideResponse'
+
+  /api/v1/inventory/price-overrides/effective-price:
+    get:
+      tags:
+        - Inventory - Price Overrides
+      summary: Hitung Harga Efektif Kasir POS (Effective Price)
+      description: |
+        Endpoint kunci untuk Kasir POS. Menghitung harga jual riil saat ini (base price vs promotional price aktif).
+        Jika ada promo aktif di cabang tsb pada detik ini, mengembalikan `effective_price = promotional_price` dan `has_discount = true`.
+        Jika tidak ada, mengembalikan `effective_price = base_price` dan `has_discount = false`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: product_id
+          in: query
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+            example: 01956e18-648b-7341-949f-93dca6094628
+        - name: location_id
+          in: query
+          required: true
+          description: ID Lokasi Cabang Kasir (UUIDv7)
+          schema:
+            type: string
+            example: 018f0a00-0000-7000-0000-000000000001
+      responses:
+        '200':
+          description: Harga efektif berhasil dihitung
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EffectivePriceResponse'
+        '400':
+          description: Parameter query product_id atau location_id tidak diisi
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Produk tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/price-overrides/{id}/deactivate:
+    patch:
+      tags:
+        - Inventory - Price Overrides
+      summary: Nonaktifkan Promo Harga Cabang (Deactivate)
+      description: Mematikan promo harga sebelum tanggal kedaluwarsanya secara manual.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Price Override (UUIDv7)
+          schema:
+            type: string
+            example: 018f0a55-6677-7888-9999-000011112222
+      responses:
+        '200':
+          description: Promo berhasil dinonaktifkan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceOverrideResponse'
+        '404':
+          description: Promo harga tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/price-overrides/{id}/claim:
+    post:
+      tags:
+        - Inventory - Price Overrides
+      summary: Klaim Kuota Promo (Kasir POS / Checkout)
+      description: |
+        Memotong sejumlah unit dari kuota promo saat terjadi transaksi kasir.
+        Jika kuota habis atau unit melebihi sisa kuota, sistem mengembalikan 409 Conflict.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Price Override (UUIDv7)
+          schema:
+            type: string
+            example: 018f0a55-6677-7888-9999-000011112222
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimPromoQuotaRequest'
+      responses:
+        '200':
+          description: Kuota promo berhasil diklaim
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: kuota promo berhasil diklaim
+                  claimed_quantity:
+                    type: integer
+                    example: 1
+        '404':
+          description: Promo tidak ditemukan atau tidak aktif
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Kuota promo telah habis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/transfers:
+    post:
+      tags:
+        - Inventory - Stock Transfers
+      summary: Buat Permohonan Mutasi Stok (Multi-Item & Serial Tracking)
+      description: |
+        Membuat dokumen transfer antar cabang baru dengan status awal `pending_approval`.
+        Kuantitas barang pada cabang asal langsung dicadangkan (`ReservedQuantity++`) secara atomik
+        agar tidak bisa dijual oleh kasir di cabang asal.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStockTransferRequest'
+      responses:
+        '201':
+          description: Dokumen mutasi stok berhasil dibuat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockTransferResponse'
+        '400':
+          description: Request body atau validasi item/stok tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Inventory - Stock Transfers
+      summary: Daftar Dokumen Mutasi Stok
+      description: Mengambil riwayat transfer stok dengan opsi filter status, cabang asal, cabang tujuan, dan pagination.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending_approval, approved, in_transit, received, rejected, cancelled]
+          description: Filter berdasarkan status dokumen mutasi
+        - in: query
+          name: from_location_id
+          schema:
+            type: string
+          description: Filter berdasarkan cabang asal
+        - in: query
+          name: to_location_id
+          schema:
+            type: string
+          description: Filter berdasarkan cabang tujuan
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Daftar dokumen mutasi stok
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StockTransferResponse'
+
+  /api/v1/inventory/transfers/{id}:
+    get:
+      tags:
+        - Inventory - Stock Transfers
+      summary: Detail Dokumen Mutasi Stok
+      description: Mengambil informasi lengkap 1 dokumen transfer beserta rincian item barang dan nomor serinya. Parameter `{id}` bisa berupa UUID transfer atau nomor transfer (`TRF-...`).
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: UUID transfer atau nomor transfer (contoh TRF-202609-0001)
+      responses:
+        '200':
+          description: Detail dokumen mutasi stok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockTransferResponse'
+        '404':
+          description: Dokumen mutasi stok tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/transfers/{id}/approve:
+    post:
+      tags:
+        - Inventory - Stock Transfers
+      summary: Setujui Dokumen Mutasi Stok (Superadmin / Owner)
+      description: Mengubah status dari `pending_approval` menjadi `approved`.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: UUID transfer stok
+      responses:
+        '200':
+          description: Dokumen transfer berhasil disetujui
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockTransferResponse'
+        '404':
+          description: Dokumen mutasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Status tidak valid untuk disetujui (harus pending_approval)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/transfers/{id}/reject:
+    post:
+      tags:
+        - Inventory - Stock Transfers
+      summary: Tolak Permohonan Mutasi Stok
+      description: Menolak transfer berstatus `pending_approval` dan secara otomatis melepaskan cadangan stok di cabang asal (`ReleaseReservation`).
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: UUID transfer stok
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectStockTransferRequest'
+      responses:
+        '200':
+          description: Dokumen transfer berhasil ditolak dan reservasi stok dilepas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockTransferResponse'
+        '404':
+          description: Dokumen mutasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Status tidak valid untuk ditolak (harus pending_approval)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/transfers/{id}/ship:
+    post:
+      tags:
+        - Inventory - Stock Transfers
+      summary: Konfirmasi Pengiriman Barang (Truk Berangkat)
+      description: Mengubah status dari `approved` menjadi `in_transit`. Kuantitas fisik di cabang asal dipotong secara atomik (`DeductReserved`). Kuantitas di cabang tujuan belum bertambah karena barang masih di perjalanan.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: UUID transfer stok
+      responses:
+        '200':
+          description: Konfirmasi pengiriman berhasil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockTransferResponse'
+        '404':
+          description: Dokumen mutasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Status transfer belum approved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/transfers/{id}/receive:
+    post:
+      tags:
+        - Inventory - Stock Transfers
+      summary: Konfirmasi Penerimaan Barang di Cabang Tujuan
+      description: Mengubah status dari `in_transit` menjadi `received`. Menambahkan stok fisik di cabang tujuan (`AdjustQuantity`) dan memperbarui lokasi seluruh unit berserial yang ditransfer ke cabang tujuan.
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: UUID transfer stok
+      responses:
+        '200':
+          description: Konfirmasi penerimaan berhasil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockTransferResponse'
+        '404':
+          description: Dokumen mutasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Status transfer belum in_transit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/warranties/policies:
+    post:
+      tags:
+        - Inventory - Warranties
+      summary: Buat Master Kebijakan Garansi Baru
+      description: Membuat master template kartu garansi (garansi toko atau resmi pabrik).
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWarrantyPolicyRequest'
+      responses:
+        '201':
+          description: Kebijakan garansi berhasil dibuat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarrantyPolicyResponse'
+        '400':
+          description: Parameter atau durasi tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Inventory - Warranties
+      summary: Daftar Master Kebijakan Garansi
+      description: Mengambil seluruh template master kartu garansi dengan filter opsional tipe dan status aktif.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [toko, pabrik]
+          description: Filter jenis garansi
+        - name: active_only
+          in: query
+          required: false
+          schema:
+            type: boolean
+          description: Hanya tampilkan template aktif
+      responses:
+        '200':
+          description: Daftar kebijakan garansi
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WarrantyPolicyResponse'
+
+  /api/v1/inventory/products/{id}/warranties:
+    post:
+      tags:
+        - Inventory - Warranties
+      summary: Tetapkan Kebijakan Garansi ke Produk
+      description: |
+        Menetapkan kartu garansi ke produk.
+        Invariant: Maksimal 1 garansi aktif per 'type' (toko/pabrik).
+        Penetapan garansi baru bertipe sama otomatis menonaktifkan garansi aktif sebelumnya.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: UUID produk
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignProductWarrantyRequest'
+      responses:
+        '201':
+          description: Garansi produk berhasil ditetapkan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductWarrantyResponse'
+        '404':
+          description: Produk atau kebijakan garansi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Inventory - Warranties
+      summary: Ambil Garansi Aktif Milik Produk
+      description: Mengambil garansi toko dan garansi resmi pabrik yang sedang aktif berlaku pada produk.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: UUID produk
+      responses:
+        '200':
+          description: Daftar garansi aktif produk
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProductWarrantyResponse'
+        '404':
+          description: Produk tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/inventory/warranties/products/{id}/deactivate:
+    post:
+      tags:
+        - Inventory - Warranties
+      summary: Nonaktifkan Penugasan Garansi Produk
+      description: Menonaktifkan penugasan garansi produk secara manual.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: UUID penugasan garansi produk (inv_product_warranties.id)
+      responses:
+        '200':
+          description: Penugasan garansi berhasil dinonaktifkan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductWarrantyResponse'
+        '404':
+          description: Penugasan garansi produk tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Masukkan token JWT yang ditandatangani dengan HMAC-SHA256.
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: nama kategori tidak boleh kosong
+
+    CreateCategoryRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: Elektronik & Gadget
+        parent_id:
+          type: string
+          nullable: true
+          example: null
+        image_url:
+          type: string
+          nullable: true
+          example: https://images.unsplash.com/photo-1550009158-9ebf69173e03
+
+    UpdateCategoryRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: Televisi, Audio & Video
+        parent_id:
+          type: string
+          nullable: true
+          example: null
+        image_url:
+          type: string
+          nullable: true
+          example: https://images.unsplash.com/photo-1593359677879-a4bb92f829d1
+
+    CategoryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 01a0b4ca-8881-7419-92d9-2a865f192ae9
+        name:
+          type: string
+          example: Elektronik & Gadget
+        parent_id:
+          type: string
+          nullable: true
+          example: null
+        image_url:
+          type: string
+          nullable: true
+          example: https://images.unsplash.com/photo-1550009158-9ebf69173e03
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateProductRequest:
+      type: object
+      required:
+        - sku
+        - name
+        - unit
+        - purchase_price
+        - selling_price
+      properties:
+        sku:
+          type: string
+          example: TV-LG-43-UQ7500
+        category_id:
+          type: string
+          example: 01a0b4ca-8881-7419-92d9-2a865f192ae9
+        name:
+          type: string
+          example: Smart TV LG 43 Inch 4K UHD WebOS
+        brand:
+          type: string
+          example: LG
+        description:
+          type: string
+          example: Smart TV dengan prosesor AI α5 Gen5 4K dan HDR10 Pro.
+        unit:
+          type: string
+          example: unit
+        purchase_price:
+          type: integer
+          format: int64
+          description: Harga beli dalam Rupiah bulat (bukan sen)
+          example: 3850000
+        selling_price:
+          type: integer
+          format: int64
+          description: Harga jual dalam Rupiah bulat (bukan sen)
+          example: 4599000
+        is_ppn:
+          type: boolean
+          default: true
+          example: true
+        weight_gram:
+          type: integer
+          example: 8900
+        atribut_varian:
+          type: object
+          description: JSON atribut fleksibel retail
+          example:
+            screen_size: 43 inch
+            resolution: 4K UHD
+            power_watt: 110
+
+    UpdateProductRequest:
+      type: object
+      required:
+        - name
+        - unit
+        - purchase_price
+        - selling_price
+      properties:
+        name:
+          type: string
+          example: Smart TV LG 43 Inch 4K UHD (Promo)
+        brand:
+          type: string
+          example: LG
+        description:
+          type: string
+          example: Versi promo dengan bonus bracket dinding.
+        unit:
+          type: string
+          example: unit
+        purchase_price:
+          type: integer
+          format: int64
+          example: 3800000
+        selling_price:
+          type: integer
+          format: int64
+          example: 4399000
+        is_ppn:
+          type: boolean
+          example: true
+        weight_gram:
+          type: integer
+          example: 8900
+        atribut_varian:
+          type: object
+          example:
+            screen_size: 43 inch
+            resolution: 4K UHD
+
+    SetProductStatusRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [active, inactive, discontinued]
+          example: inactive
+
+    CreateProductResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 01956e1a-5b12-70b3-bb39-b9d92ef7df41
+        message:
+          type: string
+          example: Produk berhasil dibuat
+
+    ProductResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 01956e1a-5b12-70b3-bb39-b9d92ef7df41
+        sku:
+          type: string
+          example: TV-LG-43-UQ7500
+        category_id:
+          type: string
+          example: 01a0b4ca-8881-7419-92d9-2a865f192ae9
+        name:
+          type: string
+          example: Smart TV LG 43 Inch 4K UHD WebOS
+        brand:
+          type: string
+          example: LG
+        description:
+          type: string
+          example: Smart TV dengan prosesor AI α5 Gen5 4K
+        unit:
+          type: string
+          example: unit
+        purchase_price:
+          type: integer
+          format: int64
+          example: 3850000
+        selling_price:
+          type: integer
+          format: int64
+          example: 4599000
+        status:
+          type: string
+          example: active
+        is_ppn:
+          type: boolean
+          example: true
+        weight_gram:
+          type: integer
+          example: 8900
+        atribut_varian:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ListProductResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductResponse'
+        total:
+          type: integer
+          example: 25
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 10
+        total_pages:
+          type: integer
+          example: 3
+
+    CreateLocationRequest:
+      type: object
+      required:
+        - code
+        - name
+        - type
+      properties:
+        code:
+          type: string
+          example: CAB-BDG
+        name:
+          type: string
+          example: Cabang Bandung - Asia Afrika
+        type:
+          type: string
+          enum: [physical, online]
+          example: physical
+        address:
+          type: string
+          example: Jl. Asia Afrika No. 10, Bandung
+
+    UpdateLocationRequest:
+      type: object
+      required:
+        - code
+        - name
+        - type
+      properties:
+        code:
+          type: string
+          example: CAB-BDG-01
+        name:
+          type: string
+          example: Cabang Bandung Utama
+        type:
+          type: string
+          enum: [physical, online]
+          example: physical
+        address:
+          type: string
+          example: Jl. Asia Afrika No. 12, Bandung
+
+    SetLocationStatusRequest:
+      type: object
+      required:
+        - is_active
+      properties:
+        is_active:
+          type: boolean
+          example: false
+
+    LocationResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 018f0a00-0000-7000-0000-000000000001
+        code:
+          type: string
+          example: CAB-BDG
+        name:
+          type: string
+          example: Cabang Bandung - Asia Afrika
+        type:
+          type: string
+          example: physical
+        address:
+          type: string
+          example: Jl. Asia Afrika No. 10, Bandung
+        is_active:
+          type: boolean
+          example: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AdjustStockRequest:
+      type: object
+      required:
+        - product_id
+        - location_id
+        - new_quantity
+      properties:
+        product_id:
+          type: string
+          example: 01956e18-648b-7341-949f-93dca6094628
+        location_id:
+          type: string
+          example: 018f0a00-0000-7000-0000-000000000001
+        new_quantity:
+          type: integer
+          minimum: 0
+          example: 25
+        reason:
+          type: string
+          example: Stock opname awal bulan
+
+    UpdateMinStockRequest:
+      type: object
+      required:
+        - product_id
+        - location_id
+        - min_stock
+      properties:
+        product_id:
+          type: string
+          example: 01956e18-648b-7341-949f-93dca6094628
+        location_id:
+          type: string
+          example: 018f0a00-0000-7000-0000-000000000001
+        min_stock:
+          type: integer
+          minimum: 0
+          example: 5
+
+    StockResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 018f0a11-2233-7444-8555-666677778888
+        product_id:
+          type: string
+          example: 01956e18-648b-7341-949f-93dca6094628
+        location_id:
+          type: string
+          example: 018f0a00-0000-7000-0000-000000000001
+        quantity:
+          type: integer
+          description: Total stok fisik di cabang
+          example: 25
+        reserved_quantity:
+          type: integer
+          description: Stok yang sedang dibooking pesanan berjalan
+          example: 3
+        available_quantity:
+          type: integer
+          description: Stok bebas siap jual (quantity - reserved_quantity)
+          example: 22
+        min_stock:
+          type: integer
+          description: Batas minimum peringatan stok menipis
+          example: 5
+        is_low_stock:
+          type: boolean
+          description: True jika quantity <= min_stock
+          example: false
+        updated_at:
+          type: string
+          format: date-time
+
+    AddBarcodeRequest:
+      type: object
+      required:
+        - barcode
+      properties:
+        barcode:
+          type: string
+          example: '8806091234567'
+        is_primary:
+          type: boolean
+          example: true
+
+    BarcodeResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 018f0a22-3344-7555-8666-777788889999
+        product_id:
+          type: string
+          example: 01956e18-648b-7341-949f-93dca6094628
+        barcode:
+          type: string
+          example: '8806091234567'
+        is_primary:
+          type: boolean
+          example: true
+        created_at:
+          type: string
+          format: date-time
+
+    ProductLookupResponse:
+      type: object
+      properties:
+        product:
+          $ref: '#/components/schemas/ProductResponse'
+        scanned_barcode:
+          $ref: '#/components/schemas/BarcodeResponse'
+
+    RegisterSerialUnitsRequest:
+      type: object
+      required:
+        - location_id
+        - serial_numbers
+      properties:
+        location_id:
+          type: string
+          example: 018f0a00-0000-7000-0000-000000000001
+        serial_numbers:
+          type: array
+          items:
+            type: string
+          example: ['SN-SAMSUNG-S24-001', 'SN-SAMSUNG-S24-002', 'SN-SAMSUNG-S24-003']
+
+    SerialUnitResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 01956e22-3344-7555-8666-777788889999
+        product_id:
+          type: string
+          example: 01956e18-648b-7341-949f-93dca6094628
+        location_id:
+          type: string
+          example: 018f0a00-0000-7000-0000-000000000001
+        serial_number:
+          type: string
+          example: 'SN-SAMSUNG-S24-001'
+        status:
+          type: string
+          enum: [tersedia, terjual, retur]
+          example: tersedia
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SerialUnitLookupResponse:
+      type: object
+      properties:
+        serial_unit:
+          $ref: '#/components/schemas/SerialUnitResponse'
+        product_name:
+          type: string
+          example: Samsung Galaxy S24 Ultra
+        product_sku:
+          type: string
+          example: HP-SAM-S24-01
+        product_brand:
+          type: string
+          example: Samsung
+        location_name:
+          type: string
+          example: Cabang Bandung Dago
+        location_code:
+          type: string
+          example: BDG-01
+
+    UpdateSerialStatusRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [terjual, retur]
+          example: terjual
+
+    CreatePriceOverrideRequest:
+      type: object
+      required:
+        - location_id
+        - promotional_price
+        - start_date
+        - end_date
+        - reason
+      properties:
+        location_id:
+          type: string
+          example: 018f0a00-0000-7000-0000-000000000001
+        promotional_price:
+          type: integer
+          description: Harga promo dalam satuan terkecil (Rupiah)
+          example: 18499000
+        max_quantity:
+          type: integer
+          nullable: true
+          description: Batas kuota unit promo (null = tidak terbatas/unlimited, >0 = flash sale)
+          example: 5
+        start_date:
+          type: string
+          format: date-time
+          example: '2026-09-01T00:00:00Z'
+        end_date:
+          type: string
+          format: date-time
+          example: '2026-10-31T23:59:59Z'
+        reason:
+          type: string
+          example: 'Promo Grand Opening Cabang Bandung Utama'
+
+    PriceOverrideResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 01956e55-6677-7888-9999-000011112222
+        product_id:
+          type: string
+          example: 01956e18-648b-7341-949f-93dca6094628
+        location_id:
+          type: string
+          example: 018f0a00-0000-7000-0000-000000000001
+        promotional_price:
+          type: integer
+          example: 18499000
+        max_quantity:
+          type: integer
+          nullable: true
+          example: 5
+        claimed_quantity:
+          type: integer
+          example: 2
+        remaining_quantity:
+          type: integer
+          nullable: true
+          example: 3
+        start_date:
+          type: string
+          format: date-time
+        end_date:
+          type: string
+          format: date-time
+        reason:
+          type: string
+          example: 'Promo Grand Opening Cabang Bandung Utama'
+        is_active:
+          type: boolean
+          example: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    EffectivePriceResponse:
+      type: object
+      properties:
+        product_id:
+          type: string
+          example: 01956e18-648b-7341-949f-93dca6094628
+        location_id:
+          type: string
+          example: 018f0a00-0000-7000-0000-000000000001
+        base_price:
+          type: integer
+          description: Harga jual standar master produk
+          example: 19999000
+        effective_price:
+          type: integer
+          description: Harga riil yang harus dibayar konsumen saat transaksi kasir
+          example: 18499000
+        has_discount:
+          type: boolean
+          description: True jika ada promo aktif yang berlaku saat ini
+          example: true
+        discount_amount:
+          type: integer
+          description: Nilai selisih diskon (base_price - effective_price)
+          example: 1500000
+        remaining_quota:
+          type: integer
+          nullable: true
+          description: Sisa kuota promo yang masih dapat diklaim (null jika promo tidak terbatas)
+          example: 3
+        promo_id:
+          type: string
+          nullable: true
+          example: 01956e55-6677-7888-9999-000011112222
+        promo_reason:
+          type: string
+          nullable: true
+          example: 'Promo Grand Opening Cabang Bandung Utama'
+
+    ClaimPromoQuotaRequest:
+      type: object
+      properties:
+        quantity:
+          type: integer
+          description: Jumlah kuota unit yang diklaim (default 1)
+          example: 1
+
+    StockTransferItemInput:
+      type: object
+      required:
+        - product_id
+        - quantity
+      properties:
+        product_id:
+          type: string
+          example: 01956e18-648b-7341-949f-93dca6094628
+        quantity:
+          type: integer
+          minimum: 1
+          example: 2
+        serial_unit_ids:
+          type: array
+          items:
+            type: string
+          example:
+            - 01a0c9f7-62f0-70ca-ae6e-94267979abaa
+            - 01a0c9f7-62f0-7889-a0ec-ec75a9a7b16c
+
+    CreateStockTransferRequest:
+      type: object
+      required:
+        - from_location_id
+        - to_location_id
+        - items
+      properties:
+        from_location_id:
+          type: string
+          example: 01a0c9f2-69ed-7190-8fe5-52528afaebd5
+        to_location_id:
+          type: string
+          example: 01a0c9f2-6a4f-781f-8270-04bee1b7ce36
+        notes:
+          type: string
+          example: Pengiriman stok display dan unit penjualan cabang Surabaya
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/StockTransferItemInput'
+
+    RejectStockTransferRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          example: Kapasitas gudang cabang tujuan sedang penuh
+
+    StockTransferItemResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 01a0c9f7-62fd-7770-b1e0-4a9623061689
+        product_id:
+          type: string
+          example: 01956e18-648b-7341-949f-93dca6094628
+        quantity:
+          type: integer
+          example: 2
+        serial_unit_ids:
+          type: array
+          items:
+            type: string
+          example:
+            - 01a0c9f7-62f0-70ca-ae6e-94267979abaa
+            - 01a0c9f7-62f0-7889-a0ec-ec75a9a7b16c
+
+    StockTransferResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 01a0c9f7-62fd-7330-b1e0-4a9623061689
+        transfer_number:
+          type: string
+          example: TRF-202609-0001
+        from_location_id:
+          type: string
+          example: 01a0c9f2-69ed-7190-8fe5-52528afaebd5
+        to_location_id:
+          type: string
+          example: 01a0c9f2-6a4f-781f-8270-04bee1b7ce36
+        status:
+          type: string
+          enum: [pending_approval, approved, in_transit, received, rejected, cancelled]
+          example: pending_approval
+        notes:
+          type: string
+          example: Pengiriman stok display dan unit penjualan cabang Surabaya
+        requested_by:
+          type: string
+          example: usr_admin_01
+        approved_by:
+          type: string
+          nullable: true
+          example: usr_owner_01
+        rejected_by:
+          type: string
+          nullable: true
+          example: null
+        rejection_reason:
+          type: string
+          nullable: true
+          example: null
+        received_by:
+          type: string
+          nullable: true
+          example: usr_wh_admin_01
+        shipped_at:
+          type: string
+          format: date-time
+          nullable: true
+        received_at:
+          type: string
+          format: date-time
+          nullable: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/StockTransferItemResponse'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateWarrantyPolicyRequest:
+      type: object
+      required:
+        - name
+        - type
+      properties:
+        name:
+          type: string
+          example: Garansi Toko Tukar Baru 7 Hari
+        type:
+          type: string
+          enum: [toko, pabrik]
+          example: toko
+        duration_months:
+          type: integer
+          default: 0
+          example: 0
+        duration_days:
+          type: integer
+          default: 0
+          example: 7
+        coverage:
+          type: string
+          example: Tukar unit baru jika ditemukan cacat produksi
+        claim_instructions:
+          type: string
+          example: Bawa nota fisik, unit dan kotak lengkap ke toko terdekat
+
+    WarrantyPolicyResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 01a0ca0a-0111-7210-bac1-310a1b4e1619
+        name:
+          type: string
+          example: Garansi Toko Tukar Baru 7 Hari
+        type:
+          type: string
+          enum: [toko, pabrik]
+          example: toko
+        duration_months:
+          type: integer
+          example: 0
+        duration_days:
+          type: integer
+          example: 7
+        coverage:
+          type: string
+          example: Tukar unit baru jika ditemukan cacat produksi
+        claim_instructions:
+          type: string
+          example: Bawa nota fisik, unit dan kotak lengkap ke toko terdekat
+        is_active:
+          type: boolean
+          example: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AssignProductWarrantyRequest:
+      type: object
+      required:
+        - warranty_policy_id
+      properties:
+        warranty_policy_id:
+          type: string
+          example: 01a0ca0a-0111-7210-bac1-310a1b4e1619
+
+    ProductWarrantyResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 01a0ca0a-0123-73a4-9ec8-d7b0517ce4db
+        product_id:
+          type: string
+          example: 01a0c9fc-9d9f-7d7f-ae87-5394f76d79a9
+        warranty_policy_id:
+          type: string
+          example: 01a0ca0a-0111-7210-bac1-310a1b4e1619
+        type:
+          type: string
+          enum: [toko, pabrik]
+          example: toko
+        is_active:
+          type: boolean
+          example: true
+        policy:
+          $ref: '#/components/schemas/WarrantyPolicyResponse'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time

@@ -1,0 +1,575 @@
+openapi: 3.0.3
+info:
+  title: ERP Retail Modular — API Specification
+  version: 1.0.0
+  description: |
+    Spesifikasi OpenAPI resmi untuk sistem ERP Retail Modular (Backend Go + MySQL).
+    Modul aktif: **Inventory**.
+    Semua aggregate ID menggunakan format **UUIDv7**.
+servers:
+  - url: http://localhost:8088
+    description: Development Server Local
+
+tags:
+  - name: System
+    description: Health check dan status server
+  - name: Inventory - Categories
+    description: Manajemen pohon kategori produk (Level 1 & Level 2)
+  - name: Inventory - Products
+    description: Master produk retail, harga, PPN, varian dinamis, dan status
+
+paths:
+  /health:
+    get:
+      tags:
+        - System
+      summary: Server Health Check
+      description: Endpoint publik tanpa autentikasi untuk memverifikasi server aktif.
+      responses:
+        '200':
+          description: Server berjalan normal
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  version:
+                    type: string
+                    example: 0.1.0
+
+  /api/v1/inventory/categories:
+    post:
+      tags:
+        - Inventory - Categories
+      summary: Buat Kategori Baru
+      description: Membuat kategori utama (parent_id = null) atau sub-kategori.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCategoryRequest'
+      responses:
+        '201':
+          description: Kategori berhasil dibuat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryResponse'
+        '400':
+          description: Input tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token tidak valid atau tidak disertakan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Inventory - Categories
+      summary: Ambil Daftar Seluruh Kategori
+      description: Mengambil seluruh pohon kategori yang tersimpan di database.
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Daftar kategori berhasil diambil
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CategoryResponse'
+        '401':
+          description: Token tidak valid
+
+  /api/v1/inventory/categories/{id}:
+    put:
+      tags:
+        - Inventory - Categories
+      summary: Perbarui Data Kategori
+      description: Mengubah nama atau gambar kategori.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Kategori (UUIDv7)
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCategoryRequest'
+      responses:
+        '200':
+          description: Kategori berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryResponse'
+        '404':
+          description: Kategori tidak ditemukan
+        '400':
+          description: Data input tidak valid
+
+    delete:
+      tags:
+        - Inventory - Categories
+      summary: Hapus Kategori
+      description: Menghapus kategori berdasarkan ID.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Kategori (UUIDv7)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Kategori berhasil dihapus
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Kategori berhasil dihapus
+        '404':
+          description: Kategori tidak ditemukan
+
+  /api/v1/inventory/products:
+    post:
+      tags:
+        - Inventory - Products
+      summary: Buat Master Produk Baru
+      description: Membuat produk baru. Harga disimpan dalam satuan integer Rupiah utuh.
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProductRequest'
+      responses:
+        '201':
+          description: Produk berhasil dibuat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateProductResponse'
+        '400':
+          description: Validasi gagal (misal SKU duplikat atau harga negatif)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags:
+        - Inventory - Products
+      summary: Daftar Produk dengan Filter & Pagination
+      description: Mengambil daftar produk dengan filter status, kategori, pencarian, dan halaman.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: search
+          in: query
+          description: Cari berdasarkan Nama Produk atau SKU
+          schema:
+            type: string
+        - name: category_id
+          in: query
+          description: Filter berdasarkan ID Kategori
+          schema:
+            type: string
+        - name: status
+          in: query
+          description: Filter status produk
+          schema:
+            type: string
+            enum: [active, inactive, discontinued]
+        - name: page
+          in: query
+          description: Nomor halaman (default 1)
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          description: Jumlah item per halaman (default 10)
+          schema:
+            type: integer
+            default: 10
+      responses:
+        '200':
+          description: Daftar produk berhasil diambil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListProductResponse'
+
+  /api/v1/inventory/products/{id}:
+    get:
+      tags:
+        - Inventory - Products
+      summary: Detail Satu Produk
+      description: Mengambil detail lengkap satu produk berdasarkan ID UUIDv7.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Detail produk ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductResponse'
+        '404':
+          description: Produk tidak ditemukan
+
+    put:
+      tags:
+        - Inventory - Products
+      summary: Perbarui Data Produk (Full Update)
+      description: Memperbarui seluruh data produk (kecuali SKU dan CategoryID demi audit log).
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProductRequest'
+      responses:
+        '200':
+          description: Produk berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductResponse'
+        '404':
+          description: Produk tidak ditemukan
+
+  /api/v1/inventory/products/{id}/status:
+    patch:
+      tags:
+        - Inventory - Products
+      summary: Ubah Status Produk (Partial Update)
+      description: Mengubah status produk menjadi active, inactive, atau discontinued.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID Produk (UUIDv7)
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetProductStatusRequest'
+      responses:
+        '200':
+          description: Status berhasil diperbarui
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  status:
+                    type: string
+                  message:
+                    type: string
+                    example: status produk berhasil diubah
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Masukkan token JWT yang ditandatangani dengan HMAC-SHA256.
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: nama kategori tidak boleh kosong
+
+    CreateCategoryRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: Elektronik & Gadget
+        parent_id:
+          type: string
+          nullable: true
+          example: null
+        image_url:
+          type: string
+          nullable: true
+          example: https://images.unsplash.com/photo-1550009158-9ebf69173e03
+
+    UpdateCategoryRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          example: Televisi, Audio & Video
+        parent_id:
+          type: string
+          nullable: true
+          example: null
+        image_url:
+          type: string
+          nullable: true
+          example: https://images.unsplash.com/photo-1593359677879-a4bb92f829d1
+
+    CategoryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 01a0b4ca-8881-7419-92d9-2a865f192ae9
+        name:
+          type: string
+          example: Elektronik & Gadget
+        parent_id:
+          type: string
+          nullable: true
+          example: null
+        image_url:
+          type: string
+          nullable: true
+          example: https://images.unsplash.com/photo-1550009158-9ebf69173e03
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateProductRequest:
+      type: object
+      required:
+        - sku
+        - name
+        - unit
+        - purchase_price
+        - selling_price
+      properties:
+        sku:
+          type: string
+          example: TV-LG-43-UQ7500
+        category_id:
+          type: string
+          example: 01a0b4ca-8881-7419-92d9-2a865f192ae9
+        name:
+          type: string
+          example: Smart TV LG 43 Inch 4K UHD WebOS
+        brand:
+          type: string
+          example: LG
+        description:
+          type: string
+          example: Smart TV dengan prosesor AI α5 Gen5 4K dan HDR10 Pro.
+        unit:
+          type: string
+          example: unit
+        purchase_price:
+          type: integer
+          format: int64
+          description: Harga beli dalam Rupiah bulat (bukan sen)
+          example: 3850000
+        selling_price:
+          type: integer
+          format: int64
+          description: Harga jual dalam Rupiah bulat (bukan sen)
+          example: 4599000
+        is_ppn:
+          type: boolean
+          default: true
+          example: true
+        weight_gram:
+          type: integer
+          example: 8900
+        atribut_varian:
+          type: object
+          description: JSON atribut fleksibel retail
+          example:
+            screen_size: 43 inch
+            resolution: 4K UHD
+            power_watt: 110
+
+    UpdateProductRequest:
+      type: object
+      required:
+        - name
+        - unit
+        - purchase_price
+        - selling_price
+      properties:
+        name:
+          type: string
+          example: Smart TV LG 43 Inch 4K UHD (Promo)
+        brand:
+          type: string
+          example: LG
+        description:
+          type: string
+          example: Versi promo dengan bonus bracket dinding.
+        unit:
+          type: string
+          example: unit
+        purchase_price:
+          type: integer
+          format: int64
+          example: 3800000
+        selling_price:
+          type: integer
+          format: int64
+          example: 4399000
+        is_ppn:
+          type: boolean
+          example: true
+        weight_gram:
+          type: integer
+          example: 8900
+        atribut_varian:
+          type: object
+          example:
+            screen_size: 43 inch
+            resolution: 4K UHD
+
+    SetProductStatusRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [active, inactive, discontinued]
+          example: inactive
+
+    CreateProductResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 01956e1a-5b12-70b3-bb39-b9d92ef7df41
+        message:
+          type: string
+          example: Produk berhasil dibuat
+
+    ProductResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 01956e1a-5b12-70b3-bb39-b9d92ef7df41
+        sku:
+          type: string
+          example: TV-LG-43-UQ7500
+        category_id:
+          type: string
+          example: 01a0b4ca-8881-7419-92d9-2a865f192ae9
+        name:
+          type: string
+          example: Smart TV LG 43 Inch 4K UHD WebOS
+        brand:
+          type: string
+          example: LG
+        description:
+          type: string
+          example: Smart TV dengan prosesor AI α5 Gen5 4K
+        unit:
+          type: string
+          example: unit
+        purchase_price:
+          type: integer
+          format: int64
+          example: 3850000
+        selling_price:
+          type: integer
+          format: int64
+          example: 4599000
+        status:
+          type: string
+          example: active
+        is_ppn:
+          type: boolean
+          example: true
+        weight_gram:
+          type: integer
+          example: 8900
+        atribut_varian:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ListProductResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductResponse'
+        total:
+          type: integer
+          example: 25
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 10
+        total_pages:
+          type: integer
+          example: 3

@@ -1,0 +1,6 @@
+/**
+ * Root CSS — Import design system theme + Tailwind.
+ * Theme token dari @erp/ui menjadi sumber kebenaran seluruh warna dan spacing.
+ */
+@import '@erp/ui/styles/theme.css';
+@source '../../../../packages/ui/components';

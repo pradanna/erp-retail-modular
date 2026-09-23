@@ -1,0 +1,730 @@
+# ==============================================================================
+# ERP Retail Modular — API Testing & Documentation (REST Client / Bruno / Postman)
+# ==============================================================================
+# Petunjuk Penggunaan:
+# 1. Jalankan migrasi database: cd backend && go run cmd/migrate/main.go up
+# 2. Suntikkan data awal (seeder): cd backend && go run cmd/seed/main.go
+# 3. Pastikan server Go berjalan: cd backend && go run cmd/server/main.go
+# 4. Jika menggunakan VS Code, install ekstensi "REST Client" (Huachao Mao)
+#    atau gunakan ekstensi "Bruno" / "Thunder Client".
+# 5. Klik tulisan "Send Request" yang muncul tepat di atas baris '###'.
+# ==============================================================================
+
+@baseUrl = http://localhost:8088
+@contentType = application/json
+
+# Token JWT Development (Role: superadmin, aktif hingga 1 tahun ke depan)
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoidXNyX2FkbWluXzAxIiwicm9sZSI6InN1cGVyYWRtaW4iLCJsb2NhdGlvbiI6ImxvY19wdXNhdF8wMSIsImV4cCI6MTgyMTI3NTAxNSwiaWF0IjoxNzg5NzM5MDE1fQ.-_HzgV0Z1bvAf8MKM0fJB-ve1264thx9Ez96gOljFBc
+
+# Variabel dinamis untuk testing ID (isi dengan ID hasil create di bawah)
+@createdCategoryId = 
+@createdProductId = 
+
+
+# ==============================================================================
+# 0. SERVER HEALTH CHECK (Publik / Tanpa Token)
+# ==============================================================================
+
+### 0.1 Cek Kesehatan Server
+# Mengetes apakah server menyala dan merespon request.
+GET {{baseUrl}}/health
+
+
+# ==============================================================================
+# 1. MASTER KATEGORI (inv_categories)
+# ==============================================================================
+
+### 1.1 Buat Kategori Utama (Root Category - Level 1)
+# Header: Wajib Authorization Bearer
+# Body: parent_id = null untuk kategori tingkat paling atas
+POST {{baseUrl}}/api/v1/inventory/categories
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "name": "Elektronik & Gadget",
+  "parent_id": null,
+  "image_url": "https://images.unsplash.com/photo-1550009158-9ebf69173e03"
+}
+
+### 1.2 Buat Sub-Kategori (Level 2)
+# Isi parent_id dengan ID hasil request 1.1 di atas
+POST {{baseUrl}}/api/v1/inventory/categories
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "name": "Televisi & Home Audio",
+  "parent_id": null,
+  "image_url": "https://images.unsplash.com/photo-1593359677879-a4bb92f829d1"
+}
+
+### 1.3 Ambil Daftar Seluruh Kategori
+# Mengembalikan seluruh pohon kategori yang tersimpan di database
+GET {{baseUrl}}/api/v1/inventory/categories
+Authorization: Bearer {{token}}
+
+### 1.4 Perbarui Kategori (Edit Nama / Gambar)
+# Ganti ID pada URL dengan ID kategori yang ingin diubah
+PUT {{baseUrl}}/api/v1/inventory/categories/01956e18-648b-7341-949f-93dca6094628
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "name": "Televisi, Audio & Video (Updated)",
+  "parent_id": null,
+  "image_url": "https://images.unsplash.com/photo-1593359677879-a4bb92f829d1"
+}
+
+### 1.5 Hapus Kategori
+# Menghapus kategori yang tidak lagi digunakan
+DELETE {{baseUrl}}/api/v1/inventory/categories/01956e18-648b-7341-949f-93dca6094628
+Authorization: Bearer {{token}}
+
+
+# ==============================================================================
+# 2. MASTER PRODUK (inv_products)
+# ==============================================================================
+
+### 2.1 Buat Produk Baru: Smart TV LG 43 Inch
+# Catatan Arsitektur:
+# - Harga (purchase_price & selling_price) adalah INTEGER rupiah utuh (bukan desimal float).
+# - atribut_varian adalah JSON bebas untuk spesifikasi unik ritel.
+POST {{baseUrl}}/api/v1/inventory/products
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "sku": "TV-LG-43-UQ7500",
+  "category_id": null,
+  "name": "Smart TV LG 43 Inch 4K UHD WebOS",
+  "brand": "LG",
+  "description": "Smart TV dengan prosesor AI α5 Gen5 4K, HDR10 Pro, dan platform WebOS pintar.",
+  "unit": "unit",
+  "purchase_price": 3850000,
+  "selling_price": 4599000,
+  "is_ppn": true,
+  "flag_serial_tracking": true,
+  "weight_gram": 8900,
+  "atribut_varian": {
+    "screen_size": "43 inch",
+    "resolution": "3840 x 2160 (4K UHD)",
+    "power_watt": 110,
+    "hdmi_ports": 3,
+    "usb_ports": 2
+  }
+}
+
+### 2.2 Buat Produk Baru: Kulkas 2 Pintu Sharp
+POST {{baseUrl}}/api/v1/inventory/products
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "sku": "KUL-SHARP-2D-205",
+  "category_id": null,
+  "name": "Kulkas Sharp 2 Pintu Inverter J-Tech 205L",
+  "brand": "Sharp",
+  "description": "Kulkas hemat energi dengan teknologi pendinginan higienis Plasmacluster.",
+  "unit": "unit",
+  "purchase_price": 2700000,
+  "selling_price": 3250000,
+  "is_ppn": true,
+  "flag_serial_tracking": true,
+  "weight_gram": 42000,
+  "atribut_varian": {
+    "capacity_liters": 205,
+    "color": "Dark Silver",
+    "defrost": "No Frost",
+    "power_watt": 100
+  }
+}
+
+### 2.3 Ambil Daftar Produk (Default: Halaman 1, Limit 10)
+GET {{baseUrl}}/api/v1/inventory/products
+Authorization: Bearer {{token}}
+
+### 2.4 Ambil Daftar Produk dengan Pencarian & Pagination
+# Query Params:
+# - search: mencari di nama produk atau SKU
+# - page: nomor halaman (mulai dari 1)
+# - limit: jumlah item per halaman
+GET {{baseUrl}}/api/v1/inventory/products?search=LG&page=1&limit=5
+Authorization: Bearer {{token}}
+
+### 2.5 Ambil Daftar Produk dengan Filter Status
+# Status yang valid: active | inactive | discontinued
+GET {{baseUrl}}/api/v1/inventory/products?status=active
+Authorization: Bearer {{token}}
+
+### 2.6 Detail Satu Produk berdasarkan ID (UUIDv7)
+# Ganti ID pada URL dengan ID produk hasil create
+GET {{baseUrl}}/api/v1/inventory/products/01956e1a-5b12-70b3-bb39-b9d92ef7df41
+Authorization: Bearer {{token}}
+
+### 2.7 Perbarui Data Produk (Full Update via PUT)
+PUT {{baseUrl}}/api/v1/inventory/products/01956e1a-5b12-70b3-bb39-b9d92ef7df41
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "category_id": null,
+  "name": "Smart TV LG 43 Inch 4K UHD WebOS (Promo Merdeka)",
+  "brand": "LG",
+  "description": "Smart TV dengan prosesor AI α5 Gen5 4K, garansi resmi 2 tahun panel.",
+  "unit": "unit",
+  "purchase_price": 3800000,
+  "selling_price": 4399000,
+  "is_ppn": true,
+  "flag_serial_tracking": true,
+  "weight_gram": 8900,
+  "atribut_varian": {
+    "screen_size": "43 inch",
+    "resolution": "4K UHD",
+    "power_watt": 110,
+    "hdmi_ports": 3,
+    "bonus": "Bracket TV Dinding"
+  }
+}
+
+### 2.8 Ubah Status Produk (Partial Update via PATCH)
+# Mengubah status produk tanpa harus mengirimkan seluruh detail barang
+PATCH {{baseUrl}}/api/v1/inventory/products/01956e1a-5b12-70b3-bb39-b9d92ef7df41/status
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "status": "inactive"
+}
+
+
+# ==============================================================================
+# 3. MASTER LOKASI / CABANG (inv_locations)
+# ==============================================================================
+
+### 3.1 Buat Lokasi Cabang Fisik Baru (Cabang Bandung)
+POST {{baseUrl}}/api/v1/inventory/locations
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "code": "CAB-BDG",
+  "name": "Cabang Bandung - Asia Afrika",
+  "type": "physical",
+  "address": "Jl. Asia Afrika No. 10, Bandung"
+}
+
+### 3.2 Buat Lokasi Gudang Storefront Online (Gudang E-Commerce)
+POST {{baseUrl}}/api/v1/inventory/locations
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "code": "WH-ONLINE",
+  "name": "Gudang Pusat Storefront Online",
+  "type": "online",
+  "address": "Jl. Soekarno Hatta No. 500, Bandung"
+}
+
+### 3.3 Ambil Daftar Seluruh Lokasi
+GET {{baseUrl}}/api/v1/inventory/locations
+Authorization: Bearer {{token}}
+
+### 3.4 Ambil Daftar Lokasi yang Aktif Saja
+GET {{baseUrl}}/api/v1/inventory/locations?active_only=true
+Authorization: Bearer {{token}}
+
+### 3.5 Ambil Detail 1 Lokasi Berdasarkan ID
+# Ganti ID di bawah dengan ID hasil request 3.1
+GET {{baseUrl}}/api/v1/inventory/locations/018f0a00-0000-7000-0000-000000000001
+Authorization: Bearer {{token}}
+
+### 3.6 Perbarui Informasi Lokasi (Kode, Nama, Tipe & Alamat)
+PUT {{baseUrl}}/api/v1/inventory/locations/018f0a00-0000-7000-0000-000000000001
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "code": "CAB-BDG-01",
+  "name": "Cabang Bandung Utama",
+  "type": "physical",
+  "address": "Jl. Asia Afrika No. 12 (Gedung Baru), Bandung"
+}
+
+### 3.7 Nonaktifkan Cabang (Soft Delete / Tutup Operasional)
+PATCH {{baseUrl}}/api/v1/inventory/locations/018f0a00-0000-7000-0000-000000000001/status
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "is_active": false
+}
+
+### 3.8 Aktifkan Kembali Cabang
+PATCH {{baseUrl}}/api/v1/inventory/locations/018f0a00-0000-7000-0000-000000000001/status
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "is_active": true
+}
+
+### 3.9 Hapus Lokasi (Hard Delete - Hanya Berhasil Jika Belum Memiliki Stok/Transaksi)
+DELETE {{baseUrl}}/api/v1/inventory/locations/018f0a00-0000-7000-0000-000000000001
+Authorization: Bearer {{token}}
+
+
+# ==============================================================================
+# 4. OPERASIONAL STOK PER CABANG (inv_stocks)
+# ==============================================================================
+
+### 4.1 Penyesuaian Stok Fisik / Stock Opname (Initial & Adjust)
+# Mengatur kuantitas fisik produk pada lokasi tertentu secara aman (Atomic Mutation + Row Locking)
+POST {{baseUrl}}/api/v1/inventory/stocks/adjust
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "product_id": "01956e18-648b-7341-949f-93dca6094628",
+  "location_id": "018f0a00-0000-7000-0000-000000000001",
+  "new_quantity": 25,
+  "reason": "Stock opname awal bulan & penerimaan suplai cabang"
+}
+
+### 4.2 Cek Stok Spesifik 1 Produk di 1 Cabang
+# Mengambil stok fisik, reservasi, stok tersedia (available), dan status alert
+GET {{baseUrl}}/api/v1/inventory/stocks?product_id=01956e18-648b-7341-949f-93dca6094628&location_id=018f0a00-0000-7000-0000-000000000001
+Authorization: Bearer {{token}}
+
+### 4.3 Ambil Seluruh Daftar Stok pada Suatu Cabang / Gudang
+GET {{baseUrl}}/api/v1/inventory/stocks?location_id=018f0a00-0000-7000-0000-000000000001
+Authorization: Bearer {{token}}
+
+### 4.4 Atur Ambang Batas Minimum Stok (Min Stock Alert Threshold)
+# Jika stok fisik jatuh <= min_stock, sistem otomatis menandai is_low_stock = true
+PUT {{baseUrl}}/api/v1/inventory/stocks/min-stock
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "product_id": "01956e18-648b-7341-949f-93dca6094628",
+  "location_id": "018f0a00-0000-7000-0000-000000000001",
+  "min_stock": 5
+}
+
+### 4.5 Ambil Daftar Peringatan Stok Menipis (Low Stock Alerts)
+# Opsional: sertakan ?location_id=... untuk filter cabang tertentu
+GET {{baseUrl}}/api/v1/inventory/stocks/alerts?location_id=018f0a00-0000-7000-0000-000000000001
+Authorization: Bearer {{token}}
+
+### 4.6 Ambil Seluruh Peringatan Stok Menipis Global (Semua Cabang)
+GET {{baseUrl}}/api/v1/inventory/stocks/alerts
+Authorization: Bearer {{token}}
+
+
+# ==============================================================================
+# 5. MANAJEMEN BARCODE PABRIK (inv_barcodes)
+# ==============================================================================
+
+### 5.1 Daftarkan Barcode Utama (Primary EAN-13) ke Produk
+# Ganti :id dengan ID produk (misal TV LG)
+POST {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/barcodes
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "barcode": "8806091234567",
+  "is_primary": true
+}
+
+### 5.2 Daftarkan Barcode Sekunder (Varian Pabrik / Kemasan Baru) ke Produk yang Sama
+POST {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/barcodes
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "barcode": "8806099999999",
+  "is_primary": false
+}
+
+### 5.3 Ambil Seluruh Barcode Milik Suatu Produk
+GET {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/barcodes
+Authorization: Bearer {{token}}
+
+### 5.4 Scan Barcode Kasir (Fast Lookup Produk by Barcode)
+# Endpoint favorit kasir: Menembak barcode kardus langsung mengembalikan detail produk & harga!
+GET {{baseUrl}}/api/v1/inventory/barcodes/lookup?code=8806091234567
+Authorization: Bearer {{token}}
+
+### 5.5 Hapus Barcode dari Produk
+# Ganti {barcode_id} dengan ID barcode yang ingin dihapus
+DELETE {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/barcodes/01956e18-648b-7341-949f-93dca6094628
+Authorization: Bearer {{token}}
+
+
+# ==============================================================================
+# 6. UJI SKENARIO VALIDASI ERROR (Negative Test Cases)
+# ==============================================================================
+
+### 6.1 Error: Request Tanpa Token Auth (Harus Mengembalikan 401 Unauthorized)
+GET {{baseUrl}}/api/v1/inventory/products
+
+### 6.2 Error: Buat Produk dengan Harga Beli Negatif (Harus Mengembalikan 400 Bad Request)
+POST {{baseUrl}}/api/v1/inventory/products
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "sku": "TEST-ERROR-001",
+  "name": "Produk Rusak",
+  "unit": "pcs",
+  "purchase_price": -50000,
+  "selling_price": 100000
+}
+
+### 6.3 Error: Buat Kategori Tanpa Nama (Harus Mengembalikan 400 Bad Request)
+POST {{baseUrl}}/api/v1/inventory/categories
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "name": "   ",
+  "parent_id": null
+}
+
+### 6.4 Error: Buat Lokasi dengan Kode yang Sudah Ada (Harus Mengembalikan 409 Conflict)
+POST {{baseUrl}}/api/v1/inventory/locations
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "code": "CAB-BDG",
+  "name": "Cabang Duplikat",
+  "type": "physical",
+  "address": "Jl. Asia Afrika"
+}
+
+### 6.5 Error: Penyesuaian Stok Kuantitas Negatif (Harus Mengembalikan 400 Bad Request)
+POST {{baseUrl}}/api/v1/inventory/stocks/adjust
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "product_id": "01956e18-648b-7341-949f-93dca6094628",
+  "location_id": "018f0a00-0000-7000-0000-000000000001",
+  "new_quantity": -10,
+  "reason": "Test invalid negative quantity"
+}
+
+### 6.6 Error: Scan Barcode yang Tidak Terdaftar (Harus Mengembalikan 404 Not Found)
+GET {{baseUrl}}/api/v1/inventory/barcodes/lookup?code=9999999999999
+Authorization: Bearer {{token}}
+
+### 6.7 Error: Daftarkan Barcode yang Sudah Dipakai Produk Lain (Harus Mengembalikan 409 Conflict)
+POST {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/barcodes
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "barcode": "8806091234567",
+  "is_primary": false
+}
+
+
+# ==============================================================================
+# 7. SERIAL NUMBER / IMEI TRACKING (inv_serial_units)
+# ==============================================================================
+
+### 7.1 Daftarkan Serial Number / IMEI Fisik Saat Barang Tiba di Cabang (Batch)
+# Daftarkan 3 unit fisik smartphone/laptop baru yang diterima di Cabang Bandung
+POST {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/serials
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "location_id": "018f0a00-0000-7000-0000-000000000001",
+  "serial_numbers": [
+    "SN-SAMSUNG-S24-001",
+    "SN-SAMSUNG-S24-002",
+    "SN-SAMSUNG-S24-003"
+  ]
+}
+
+### 7.2 Ambil Seluruh Unit Fisik Berserial Milik Produk
+GET {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/serials
+Authorization: Bearer {{token}}
+
+### 7.3 Ambil Unit Fisik yang Masih Berstatus 'tersedia' Saja
+GET {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/serials?status=tersedia
+Authorization: Bearer {{token}}
+
+### 7.4 Scan Serial Number / IMEI (Lookup Kasir POS & Klaim Garansi Service Center)
+# Kasir atau petugas garansi menembak laser ke barcode S/N di kardus atau bodi barang
+GET {{baseUrl}}/api/v1/inventory/serials/lookup?sn=SN-SAMSUNG-S24-001
+Authorization: Bearer {{token}}
+
+### 7.5 Update Status Unit Menjadi 'terjual' (Saat Transaksi Kasir Selesai)
+# Ganti ID di bawah dengan ID serial unit dari hasil request 7.1
+PATCH {{baseUrl}}/api/v1/inventory/serials/018f0a33-4455-7666-8777-888899990000/status
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "status": "terjual"
+}
+
+### 7.6 Update Status Unit Menjadi 'retur' (Saat Pelanggan Mengembalikan Barang Rusak)
+PATCH {{baseUrl}}/api/v1/inventory/serials/018f0a33-4455-7666-8777-888899990000/status
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "status": "retur"
+}
+
+### 7.7 Error: Coba Daftarkan Serial Number pada Produk Non-Serial (Harus Mengembalikan 400 Bad Request)
+# Menguji invariant bahwa produk dengan flag_serial_tracking=false tidak boleh didaftarkan nomor serinya
+POST {{baseUrl}}/api/v1/inventory/products/01956e1a-5b12-70b3-bb39-b9d92ef7df41/serials
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "location_id": "018f0a00-0000-7000-0000-000000000001",
+  "serial_numbers": ["SN-NON-SERIAL-001"]
+}
+
+### 7.8 Error: Coba Daftarkan Serial Number yang Sudah Pernah Ada (Harus Mengembalikan 409 Conflict)
+POST {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/serials
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "location_id": "018f0a00-0000-7000-0000-000000000001",
+  "serial_numbers": ["SN-SAMSUNG-S24-001"]
+}
+
+
+# ==============================================================================
+# 8. PRICE OVERRIDE / HARGA KHUSUS & PROMO CABANG (inv_price_overrides)
+# ==============================================================================
+
+### 8.1 Daftarkan Promo / Harga Khusus Cabang Baru (Misal: Promo Grand Opening Bandung)
+# Ganti ID produk dengan ID Samsung Galaxy S24 (harga dasar Rp 19.999.000)
+POST {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/price-overrides
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "location_id": "018f0a00-0000-7000-0000-000000000001",
+  "promotional_price": 18499000,
+  "start_date": "2026-09-01T00:00:00Z",
+  "end_date": "2026-10-31T23:59:59Z",
+  "reason": "Promo Grand Opening Cabang Bandung Utama"
+}
+
+### 8.2 Ambil Riwayat & Daftar Promo Harga Milik Suatu Produk
+GET {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/price-overrides
+Authorization: Bearer {{token}}
+
+### 8.3 Ambil Daftar Promo Produk yang Difilter Berdasarkan Lokasi Tertentu
+GET {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/price-overrides?location_id=018f0a00-0000-7000-0000-000000000001
+Authorization: Bearer {{token}}
+
+### 8.4 Hitung Harga Efektif Kasir POS (Effective Price: Mengambil Promo Aktif)
+# Endpoint ini yang dipanggil oleh Kasir POS saat kasir men-scan barang
+# Jika sedang ada promo aktif pada cabang tsb, akan keluar effective_price Rp 18.499.000 (has_discount: true)
+GET {{baseUrl}}/api/v1/inventory/price-overrides/effective-price?product_id=01956e18-648b-7341-949f-93dca6094628&location_id=018f0a00-0000-7000-0000-000000000001
+Authorization: Bearer {{token}}
+
+### 8.5 Hitung Harga Efektif Kasir POS pada Cabang yang Tidak Ada Promo
+# Mengembalikan harga dasar (selling_price = 19.999.000, has_discount: false)
+GET {{baseUrl}}/api/v1/inventory/price-overrides/effective-price?product_id=01956e18-648b-7341-949f-93dca6094628&location_id=018f0a00-0000-7000-0000-000000000002
+Authorization: Bearer {{token}}
+
+### 8.6 Nonaktifkan Promo Harga Cabang Secara Manual (Deactivate)
+# Ganti ID di bawah dengan ID price override dari response 8.1
+PATCH {{baseUrl}}/api/v1/inventory/price-overrides/018f0a55-6677-7888-9999-000011112222/deactivate
+Authorization: Bearer {{token}}
+
+### 8.7 Error: Daftarkan Promo yang Tumpang Tindih (Overlap) pada Cabang yang Sama
+# Invariant: Dalam 1 rentang waktu yang sama, sebuah produk di cabang yang sama hanya boleh punya 1 promo aktif
+# Harus mengembalikan 409 Conflict
+POST {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/price-overrides
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "location_id": "018f0a00-0000-7000-0000-000000000001",
+  "promotional_price": 17999000,
+  "start_date": "2026-09-15T00:00:00Z",
+  "end_date": "2026-10-15T23:59:59Z",
+  "reason": "Promo Flash Sale Bertabrakan"
+}
+
+### 8.8 Error: Harga Promo 0 atau Negatif (Harus Mengembalikan 400 Bad Request)
+POST {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/price-overrides
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "location_id": "018f0a00-0000-7000-0000-000000000001",
+  "promotional_price": 0,
+  "start_date": "2026-11-01T00:00:00Z",
+  "end_date": "2026-11-30T23:59:59Z",
+  "reason": "Promo Gratis Tidak Sah"
+}
+
+### 8.9 Daftarkan Promo Flash Sale dengan Kuota Terbatas (Contoh: max_quantity: 5 unit)
+# Promo khusus kulkas/HP hanya untuk 5 pembeli pertama, siapa cepat dia dapat
+POST {{baseUrl}}/api/v1/inventory/products/01956e18-648b-7341-949f-93dca6094628/price-overrides
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "location_id": "018f0a00-0000-7000-0000-000000000002",
+  "promotional_price": 17500000,
+  "max_quantity": 5,
+  "start_date": "2026-09-01T00:00:00Z",
+  "end_date": "2026-10-31T23:59:59Z",
+  "reason": "Flash Sale Siapa Cepat Dia Dapat (Maksimal 5 Unit)"
+}
+
+### 8.10 Klaim / Potong Kuota Promo Saat Kasir Menyelesaikan Pembayaran (Checkout POS)
+# Ganti ID di bawah dengan ID price override dari response 8.9
+POST {{baseUrl}}/api/v1/inventory/price-overrides/018f0a55-6677-7888-9999-000011112222/claim
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "quantity": 1
+}
+
+### 8.11 Error: Coba Klaim Kuota Melebihi Batas / Kuota Habis (Harus Mengembalikan 409 Conflict)
+POST {{baseUrl}}/api/v1/inventory/price-overrides/018f0a55-6677-7888-9999-000011112222/claim
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "quantity": 100
+}
+
+
+# ==============================================================================
+# 9. MUTASI STOK ANTAR CABANG / STOCK TRANSFERS (inv_stock_transfers)
+# ==============================================================================
+
+### 9.1 Buat Permohonan Mutasi Stok (Multi-Item & Serial Number Support)
+# Status awal: pending_approval. Stok di cabang asal otomatis dicadangkan (ReservedQuantity++)
+POST {{baseUrl}}/api/v1/inventory/transfers
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "from_location_id": "01a0c9f2-69ed-7190-8fe5-52528afaebd5",
+  "to_location_id": "01a0c9f2-6a4f-781f-8270-04bee1b7ce36",
+  "notes": "Pengiriman stok display dan unit penjualan cabang Surabaya",
+  "items": [
+    {
+      "product_id": "01a0c9f2-90fe-79b8-9d3e-b97812a7fcac",
+      "quantity": 2,
+      "serial_unit_ids": [
+        "01a0c9f7-62f0-70ca-ae6e-94267979abaa",
+        "01a0c9f7-62f0-7889-a0ec-ec75a9a7b16c"
+      ]
+    }
+  ]
+}
+
+### 9.2 Ambil Daftar Seluruh Mutasi Stok (Dengan Filter Opsional)
+# Filter: status, from_location_id, to_location_id, limit, page
+GET {{baseUrl}}/api/v1/inventory/transfers?status=pending_approval
+Authorization: Bearer {{token}}
+
+### 9.3 Ambil Detail 1 Dokumen Transfer (Bisa Menggunakan UUID atau Nomor Surat Jalan)
+GET {{baseUrl}}/api/v1/inventory/transfers/01a0c9f7-62fd-7330-b1e0-4a9623061689
+Authorization: Bearer {{token}}
+
+### 9.4 Setujui Permohonan Transfer Stok (Superadmin / Owner Approval)
+# Transisi: pending_approval -> approved
+POST {{baseUrl}}/api/v1/inventory/transfers/01a0c9f7-62fd-7330-b1e0-4a9623061689/approve
+Authorization: Bearer {{token}}
+
+### 9.5 Konfirmasi Truk Ekspedisi Berangkat / Kirim Barang (Shipment Departure)
+# Transisi: approved -> in_transit. Stok fisik cabang asal dipotong (DeductReserved).
+POST {{baseUrl}}/api/v1/inventory/transfers/01a0c9f7-62fd-7330-b1e0-4a9623061689/ship
+Authorization: Bearer {{token}}
+
+### 9.6 Konfirmasi Penerimaan Barang di Cabang Tujuan (Goods Received)
+# Transisi: in_transit -> received. Stok cabang tujuan bertambah & lokasi nomor seri dipindahkan.
+POST {{baseUrl}}/api/v1/inventory/transfers/01a0c9f7-62fd-7330-b1e0-4a9623061689/receive
+Authorization: Bearer {{token}}
+
+### 9.7 Tolak Permohonan Transfer Stok (Reject & Release Reserved Stock)
+# Transisi: pending_approval -> rejected. Cadangan stok di cabang asal langsung dilepas.
+POST {{baseUrl}}/api/v1/inventory/transfers/01a0c9f7-7e50-7e12-ad80-401f1f8e5ade/reject
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "reason": "Kapasitas gudang cabang tujuan sedang penuh"
+}
+
+
+# ==============================================================================
+# 10. KEBIJAKAN GARANSI TOKO & GARANSI RESMI PABRIK (WARRANTIES)
+# ==============================================================================
+
+### 10.1 Buat Master Kebijakan Garansi Toko Baru
+# Garansi Toko (misal: tukar baru 7 hari jika cacat pabrik)
+POST {{baseUrl}}/api/v1/inventory/warranties/policies
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "name": "Garansi Toko Tukar Baru 7 Hari",
+  "type": "toko",
+  "duration_months": 0,
+  "duration_days": 7,
+  "coverage": "Tukar unit baru jika ditemukan cacat produksi dalam 7 hari pembelian",
+  "claim_instructions": "Bawa nota pembelian fisik, unit, dan dus box lengkap ke toko cabang terdekat"
+}
+
+### 10.2 Buat Master Kebijakan Garansi Resmi Pabrik Baru
+# Garansi Pabrik/Distributor Resmi (misal: garansi resmi Samsung Indonesia 12 bulan)
+POST {{baseUrl}}/api/v1/inventory/warranties/policies
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "name": "Garansi Resmi Samsung Indonesia 12 Bulan",
+  "type": "pabrik",
+  "duration_months": 12,
+  "duration_days": 0,
+  "coverage": "Servis gratis dan suku cadang gratis di seluruh Authorized Service Center Samsung",
+  "claim_instructions": "Kunjungi Samsung Service Center terdekat dengan membawa kartu garansi dan invoice"
+}
+
+### 10.3 Ambil Daftar Seluruh Master Kebijakan Garansi
+# Filter opsional: ?type=toko atau ?type=pabrik, ?active_only=true
+GET {{baseUrl}}/api/v1/inventory/warranties/policies?type=toko
+Authorization: Bearer {{token}}
+
+### 10.4 Tetapkan Garansi ke Produk Tertentu (Product Warranty Assignment)
+# Invariant: Maksimal 1 garansi aktif per 'type' (toko/pabrik).
+# Jika sudah ada garansi dengan tipe sama, garansi lama otomatis dinonaktifkan.
+POST {{baseUrl}}/api/v1/inventory/products/01a0c9fc-9d9f-7d7f-ae87-5394f76d79a9/warranties
+Authorization: Bearer {{token}}
+Content-Type: {{contentType}}
+
+{
+  "warranty_policy_id": "01a0ca0a-0111-7210-bac1-310a1b4e1619"
+}
+
+### 10.5 Lihat Garansi Aktif Suatu Produk
+# Mengembalikan garansi toko dan/atau garansi pabrik yang sedang aktif pada produk
+GET {{baseUrl}}/api/v1/inventory/products/01a0c9fc-9d9f-7d7f-ae87-5394f76d79a9/warranties
+Authorization: Bearer {{token}}
+
+### 10.6 Nonaktifkan Penugasan Garansi Produk Secara Manual
+POST {{baseUrl}}/api/v1/inventory/warranties/products/01a0ca0a-0123-73a4-9ec8-d7b0517ce4db/deactivate
+Authorization: Bearer {{token}}
