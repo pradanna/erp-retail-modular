@@ -20,6 +20,8 @@ const claimsKey contextKey = "claims"
 // Embed jwt.RegisteredClaims untuk mendapatkan field standar (exp, iat, sub, dst).
 type Claims struct {
 	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	Name     string `json:"name"`
 	Role     string `json:"role"`     // "admin" | "superadmin" | "owner"
 	Location string `json:"location"` // location_id default user ini (bisa kosong)
 	jwt.RegisteredClaims
@@ -70,4 +72,31 @@ func Middleware(jwtSecret string) func(http.Handler) http.Handler {
 func GetClaims(r *http.Request) *Claims {
 	claims, _ := r.Context().Value(claimsKey).(*Claims)
 	return claims
+}
+
+// RequirePermission membuat middleware otorisasi berbasis hak akses granular (PBAC).
+// Middleware ini memeriksa apakah role pengguna yang sedang login memiliki hak akses `permission`.
+// Jika claims tidak ada, mengembalikan 401 Unauthorized.
+// Jika role tidak memiliki izin, mengembalikan 403 Forbidden.
+func RequirePermission(permission string, permService PermissionService) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims := GetClaims(r)
+			if claims == nil || claims.Role == "" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte(`{"error":"autentikasi dibutuhkan"}`))
+				return
+			}
+
+			if !permService.HasPermission(claims.Role, permission) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(`{"error":"akses ditolak: izin tidak mencukupi"}`))
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }

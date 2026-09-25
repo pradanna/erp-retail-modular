@@ -79,3 +79,37 @@ export interface LoginResponse {
 export interface VerifyPasswordResponse {
   verified: boolean;
 }
+
+// ── PBAC (Permission-Based Access Control) Types ────────────────────────────
+
+/** Representasi sebuah izin kapabilitas granular. */
+export interface Permission {
+  id: string;
+  name: string;
+  module: string;
+  description: string;
+  created_at: string;
+}
+
+/** Representasi metadata peran/role di sistem. */
+export interface RoleInfo {
+  id: string;
+  name: UserRole;
+  display_name: string;
+  description: string;
+  is_system: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** DTO matriks peran vs izin granular untuk tampilan Backoffice. */
+export interface RolePermissionsMatrix {
+  roles: RoleInfo[];
+  permissions: Permission[];
+  matrix: Record<string, string[]>; // Key: role_name, Value: []permission_name
+}
+
+/** Body untuk PUT /api/v1/roles/:role/permissions */
+export interface UpdateRolePermissionsRequest {
+  permissions: string[];
+}

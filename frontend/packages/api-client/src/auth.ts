@@ -88,10 +88,7 @@ export async function listUsers(
  * Buat staf baru (hanya superadmin/owner).
  * Endpoint: POST /api/v1/users
  */
-export async function createUser(
-  token: string,
-  req: CreateUserRequest,
-): Promise<UserResponse> {
+export async function createUser(token: string, req: CreateUserRequest): Promise<UserResponse> {
   return fetchApi<UserResponse>('/api/v1/users', {
     method: 'POST',
     body: req,
@@ -122,3 +119,36 @@ export async function setUserStatus(
     token,
   });
 }
+
+/**
+ * Ambil matriks peran dan daftar izin granular (PBAC).
+ * Endpoint: GET /api/v1/roles/matrix
+ */
+export async function getRolePermissionsMatrix(token: string): Promise<import('@erp/types').RolePermissionsMatrix> {
+  return fetchApi<import('@erp/types').RolePermissionsMatrix>('/api/v1/roles/matrix', { token });
+}
+
+/**
+ * Perbarui daftar izin yang dimiliki oleh peran tertentu (PBAC).
+ * Endpoint: PUT /api/v1/roles/:role/permissions
+ */
+export async function updateRolePermissions(
+  token: string,
+  role: string,
+  permissions: string[],
+): Promise<{ message: string }> {
+  return fetchApi<{ message: string }>(`/api/v1/roles/${role}/permissions`, {
+    method: 'PUT',
+    body: { permissions },
+    token,
+  });
+}
+
+/**
+ * Ambil daftar seluruh izin kapabilitas granular yang tersedia di sistem.
+ * Endpoint: GET /api/v1/permissions
+ */
+export async function listPermissions(token: string): Promise<import('@erp/types').Permission[]> {
+  return fetchApi<import('@erp/types').Permission[]>('/api/v1/permissions', { token });
+}
+

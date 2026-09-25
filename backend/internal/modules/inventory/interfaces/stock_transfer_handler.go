@@ -1,6 +1,7 @@
 package interfaces
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -17,10 +18,17 @@ type StockTransferHandler struct {
 	approveUC *application.ApproveStockTransferUseCase
 	rejectUC  *application.RejectStockTransferUseCase
 	shipUC    *application.ShipStockTransferUseCase
-	receiveUC *application.ReceiveStockTransferUseCase
-	getUC     *application.GetStockTransferUseCase
-	listUC    *application.ListStockTransfersUseCase
-	logger    *slog.Logger
+	receiveUC    *application.ReceiveStockTransferUseCase
+	getUC        *application.GetStockTransferUseCase
+	listUC       *application.ListStockTransfersUseCase
+	userResolver UserResolver
+	logger       *slog.Logger
+}
+
+// UserResolver menyediakan kapabilitas resolusi identitas pengguna menjadi nama lengkap.
+type UserResolver interface {
+	ResolveUserName(ctx context.Context, idOrUsername string) string
+	ResolveUserNames(ctx context.Context, idsOrUsernames []string) map[string]string
 }
 
 // NewStockTransferHandler membuat instance baru StockTransferHandler.
@@ -44,6 +52,11 @@ func NewStockTransferHandler(
 		listUC:    listUC,
 		logger:    logger,
 	}
+}
+
+// SetUserResolver menyuntikkan resolver nama pengguna untuk memperkaya response surat jalan mutasi.
+func (h *StockTransferHandler) SetUserResolver(resolver UserResolver) {
+	h.userResolver = resolver
 }
 
 // Create membuat permohonan mutasi stok antar cabang baru dan mencadangkan stok asal.
@@ -96,7 +109,7 @@ func (h *StockTransferHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, mapStockTransferToResponse(trf))
+	writeJSON(w, http.StatusCreated, h.mapStockTransferToResponse(r.Context(), trf))
 }
 
 // List mengambil daftar riwayat dokumen transfer berdasarkan filter lokasi asal, tujuan, atau status.
@@ -122,12 +135,7 @@ func (h *StockTransferHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res := make([]StockTransferResponse, 0, len(list))
-	for _, trf := range list {
-		res = append(res, mapStockTransferToResponse(trf))
-	}
-
-	writeJSON(w, http.StatusOK, res)
+	writeJSON(w, http.StatusOK, h.mapTransfersList(r.Context(), list))
 }
 
 // Get mengambil detail satu dokumen transfer lengkap dengan rincian item barangnya.
@@ -150,7 +158,7 @@ func (h *StockTransferHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, mapStockTransferToResponse(trf))
+	writeJSON(w, http.StatusOK, h.mapStockTransferToResponse(r.Context(), trf))
 }
 
 // Approve menyetujui dokumen transfer oleh Superadmin/Owner.
@@ -182,7 +190,7 @@ func (h *StockTransferHandler) Approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, mapStockTransferToResponse(trf))
+	writeJSON(w, http.StatusOK, h.mapStockTransferToResponse(r.Context(), trf))
 }
 
 // Reject menolak permohonan mutasi stok dan melepaskan reservasi stok asal.
@@ -217,7 +225,7 @@ func (h *StockTransferHandler) Reject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, mapStockTransferToResponse(trf))
+	writeJSON(w, http.StatusOK, h.mapStockTransferToResponse(r.Context(), trf))
 }
 
 // Ship menandai barang telah berangkat (in_transit) dan memotong stok cabang asal.
@@ -244,7 +252,7 @@ func (h *StockTransferHandler) Ship(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, mapStockTransferToResponse(trf))
+	writeJSON(w, http.StatusOK, h.mapStockTransferToResponse(r.Context(), trf))
 }
 
 // Receive menandai barang telah tiba di cabang tujuan (received), menambah stok tujuan, dan memindahkan lokasi serial.
@@ -276,11 +284,58 @@ func (h *StockTransferHandler) Receive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, mapStockTransferToResponse(trf))
+	writeJSON(w, http.StatusOK, h.mapStockTransferToResponse(r.Context(), trf))
 }
 
-// Helper untuk mapping domain.StockTransfer ke StockTransferResponse
-func mapStockTransferToResponse(trf *domain.StockTransfer) StockTransferResponse {
+// Helper untuk mapping batch []*domain.StockTransfer ke []StockTransferResponse dengan resolusi nama
+func (h *StockTransferHandler) mapTransfersList(ctx context.Context, list []*domain.StockTransfer) []StockTransferResponse {
+	var allUserIDs []string
+	for _, trf := range list {
+		if trf.RequestedBy != "" {
+			allUserIDs = append(allUserIDs, trf.RequestedBy)
+		}
+		if trf.ApprovedBy != nil && *trf.ApprovedBy != "" {
+			allUserIDs = append(allUserIDs, *trf.ApprovedBy)
+		}
+		if trf.ReceivedBy != nil && *trf.ReceivedBy != "" {
+			allUserIDs = append(allUserIDs, *trf.ReceivedBy)
+		}
+	}
+
+	nameMap := make(map[string]string)
+	if h.userResolver != nil && len(allUserIDs) > 0 {
+		nameMap = h.userResolver.ResolveUserNames(ctx, allUserIDs)
+	}
+
+	res := make([]StockTransferResponse, 0, len(list))
+	for _, trf := range list {
+		res = append(res, h.mapTransferWithMap(trf, nameMap))
+	}
+	return res
+}
+
+// Helper untuk mapping domain.StockTransfer tunggal ke StockTransferResponse dengan resolusi nama
+func (h *StockTransferHandler) mapStockTransferToResponse(ctx context.Context, trf *domain.StockTransfer) StockTransferResponse {
+	var userIDs []string
+	if trf.RequestedBy != "" {
+		userIDs = append(userIDs, trf.RequestedBy)
+	}
+	if trf.ApprovedBy != nil && *trf.ApprovedBy != "" {
+		userIDs = append(userIDs, *trf.ApprovedBy)
+	}
+	if trf.ReceivedBy != nil && *trf.ReceivedBy != "" {
+		userIDs = append(userIDs, *trf.ReceivedBy)
+	}
+
+	nameMap := make(map[string]string)
+	if h.userResolver != nil && len(userIDs) > 0 {
+		nameMap = h.userResolver.ResolveUserNames(ctx, userIDs)
+	}
+
+	return h.mapTransferWithMap(trf, nameMap)
+}
+
+func (h *StockTransferHandler) mapTransferWithMap(trf *domain.StockTransfer, nameMap map[string]string) StockTransferResponse {
 	items := make([]StockTransferItemResponse, 0, len(trf.Items))
 	for _, it := range trf.Items {
 		items = append(items, StockTransferItemResponse{
@@ -293,6 +348,29 @@ func mapStockTransferToResponse(trf *domain.StockTransfer) StockTransferResponse
 		})
 	}
 
+	requestedByName := trf.RequestedBy
+	if val, ok := nameMap[trf.RequestedBy]; ok && val != "" {
+		requestedByName = val
+	}
+
+	var approvedByName *string
+	if trf.ApprovedBy != nil && *trf.ApprovedBy != "" {
+		val := *trf.ApprovedBy
+		if mapped, ok := nameMap[*trf.ApprovedBy]; ok && mapped != "" {
+			val = mapped
+		}
+		approvedByName = &val
+	}
+
+	var receivedByName *string
+	if trf.ReceivedBy != nil && *trf.ReceivedBy != "" {
+		val := *trf.ReceivedBy
+		if mapped, ok := nameMap[*trf.ReceivedBy]; ok && mapped != "" {
+			val = mapped
+		}
+		receivedByName = &val
+	}
+
 	return StockTransferResponse{
 		ID:              trf.ID,
 		TransferNumber:  trf.TransferNumber,
@@ -302,8 +380,11 @@ func mapStockTransferToResponse(trf *domain.StockTransfer) StockTransferResponse
 		Notes:           trf.Notes,
 		RejectionReason: trf.RejectionReason,
 		RequestedBy:     trf.RequestedBy,
+		RequestedByName: requestedByName,
 		ApprovedBy:      trf.ApprovedBy,
+		ApprovedByName:  approvedByName,
 		ReceivedBy:      trf.ReceivedBy,
+		ReceivedByName:  receivedByName,
 		Items:           items,
 		CreatedAt:       trf.CreatedAt,
 		UpdatedAt:       trf.UpdatedAt,

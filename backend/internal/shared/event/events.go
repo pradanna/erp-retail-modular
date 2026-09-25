@@ -3,9 +3,25 @@ package event
 // Nama-nama event resmi. Menggunakan konstanta string mencegah typo
 // dan memudahkan refactoring (cari semua usage dengan mudah).
 const (
-	EventOrderPaid      = "order.paid"
-	EventGoodsReceived  = "purchasing.goods_received"
+	EventOrderPaid       = "order.paid"
+	EventGoodsReceived   = "purchasing.goods_received"
+	EventStockAdjusted   = "inventory.stock_adjusted"
 )
+
+// StockAdjustedPayload merepresentasikan payload saat penyesuaian fisik stok (Stock Opname) terjadi.
+type StockAdjustedPayload struct {
+	AdjustmentID   string
+	ProductID      string
+	ProductName    string
+	LocationID     string
+	LocationName   string
+	PreviousQty    int
+	NewQty         int
+	Difference     int
+	Reason         string
+	AdjustedBy     string
+	AdjustedByName string
+}
 
 // OrderPaidPayload adalah payload event saat transaksi penjualan berhasil dibayar.
 // Diterbitkan oleh modul Sales, dikonsumsi oleh Inventory, Finance, dan Commission.

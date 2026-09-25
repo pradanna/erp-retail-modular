@@ -5,23 +5,28 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/erp-retail/backend/internal/modules/inventory/application"
 	"github.com/erp-retail/backend/internal/modules/inventory/domain"
+	"github.com/erp-retail/backend/internal/shared/auth"
 )
 
 // StockHandler menangani request HTTP untuk manajemen stok barang per cabang/gudang.
 type StockHandler struct {
-	adjustStockUC    *application.AdjustStockUseCase
-	getStockUC       *application.GetStockUseCase
-	listStockUC      *application.ListStockByLocationUseCase
-	listAlertsUC     *application.ListLowStockAlertsUseCase
-	updateMinStockUC *application.UpdateMinStockUseCase
-	logger           *slog.Logger
+	adjustStockUC     *application.AdjustStockUseCase
+	listAdjustmentsUC *application.ListStockAdjustmentsUseCase
+	getStockUC        *application.GetStockUseCase
+	listStockUC       *application.ListStockByLocationUseCase
+	listAlertsUC      *application.ListLowStockAlertsUseCase
+	updateMinStockUC  *application.UpdateMinStockUseCase
+	logger            *slog.Logger
 }
 
 func NewStockHandler(
 	adjustStockUC *application.AdjustStockUseCase,
+	listAdjustmentsUC *application.ListStockAdjustmentsUseCase,
 	getStockUC *application.GetStockUseCase,
 	listStockUC *application.ListStockByLocationUseCase,
 	listAlertsUC *application.ListLowStockAlertsUseCase,
@@ -29,12 +34,13 @@ func NewStockHandler(
 	logger *slog.Logger,
 ) *StockHandler {
 	return &StockHandler{
-		adjustStockUC:    adjustStockUC,
-		getStockUC:       getStockUC,
-		listStockUC:      listStockUC,
-		listAlertsUC:     listAlertsUC,
-		updateMinStockUC: updateMinStockUC,
-		logger:           logger,
+		adjustStockUC:     adjustStockUC,
+		listAdjustmentsUC: listAdjustmentsUC,
+		getStockUC:        getStockUC,
+		listStockUC:       listStockUC,
+		listAlertsUC:      listAlertsUC,
+		updateMinStockUC:  updateMinStockUC,
+		logger:            logger,
 	}
 }
 
@@ -47,11 +53,24 @@ func (h *StockHandler) Adjust(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	adjustedBy := "system"
+	adjustedByName := "Admin Toko"
+	if claims := auth.GetClaims(r); claims != nil {
+		adjustedBy = claims.UserID
+		if claims.Subject != "" {
+			adjustedByName = claims.Subject
+		} else if claims.Role != "" {
+			adjustedByName = "Admin (" + claims.Role + ")"
+		}
+	}
+
 	cmd := application.AdjustStockCommand{
-		ProductID:   req.ProductID,
-		LocationID:  req.LocationID,
-		NewQuantity: req.NewQuantity,
-		Reason:      req.Reason,
+		ProductID:      req.ProductID,
+		LocationID:     req.LocationID,
+		NewQuantity:    req.NewQuantity,
+		Reason:         req.Reason,
+		AdjustedBy:     adjustedBy,
+		AdjustedByName: adjustedByName,
 	}
 
 	item, err := h.adjustStockUC.Execute(r.Context(), cmd)
@@ -177,6 +196,68 @@ func (h *StockHandler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// ListAdjustments menangani pembacaan riwayat catatan penyesuaian stok (Stock Opname).
+// Endpoint: GET /api/v1/inventory/stocks/adjustments
+func (h *StockHandler) ListAdjustments(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(q.Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+
+	filter := domain.StockAdjustmentFilter{
+		LocationID: q.Get("location_id"),
+		ProductID:  q.Get("product_id"),
+		Page:       page,
+		Limit:      limit,
+	}
+
+	items, total, err := h.listAdjustmentsUC.Execute(r.Context(), filter)
+	if err != nil {
+		h.logger.Error("gagal list stock adjustments", "error", err)
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "gagal mengambil riwayat penyesuaian stok: " + err.Error()})
+		return
+	}
+
+	res := make([]StockAdjustmentResponse, len(items))
+	for i, it := range items {
+		res[i] = StockAdjustmentResponse{
+			ID:               it.ID,
+			ProductID:        it.ProductID,
+			ProductName:      it.ProductName,
+			ProductSKU:       it.ProductSKU,
+			LocationID:       it.LocationID,
+			LocationName:     it.LocationName,
+			PreviousQuantity: it.PreviousQuantity,
+			NewQuantity:      it.NewQuantity,
+			Difference:       it.Difference,
+			Reason:           it.Reason,
+			AdjustedBy:       it.AdjustedBy,
+			AdjustedByName:   it.AdjustedByName,
+			CreatedAt:        it.CreatedAt.Format(time.RFC3339),
+		}
+	}
+
+	totalPages := (total + limit - 1) / limit
+	if totalPages < 1 {
+		totalPages = 1
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"data": res,
+		"meta": map[string]any{
+			"page":        page,
+			"limit":       limit,
+			"total_items": total,
+			"total_pages": totalPages,
+		},
+	})
 }
 
 func toStockResponse(item *domain.StockItem) *StockResponse {

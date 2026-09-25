@@ -1,10 +1,12 @@
 <script lang="ts">
   /**
-   * Input — Komponen input form reusable dengan label, leading icon, password toggle, dan error state.
+   * Input — Komponen input form reusable dengan label, leading icon, password toggle, thousandSeparator (titik rupiah), dan error state.
    *
    * Sesuai design system:
    * - Mendukung leadingIcon via Svelte 5 snippet
    * - Password visibility toggle otomatis
+   * - Thousand separator (titik pemisah ribuan otomatis untuk nominal harga/uang)
+   * - Prefix teks (misal: "Rp")
    * - Zero emoji, zero sparkle
    * - Tailwind v4 @theme tokens
    * - Robust h-12 padding & vertical centering
@@ -23,9 +25,15 @@
     showRequiredAsterisk?: boolean;
     id?: string;
     name?: string;
+    min?: number | string;
+    max?: number | string;
+    step?: number | string;
     autocomplete?: HTMLInputAttributes['autocomplete'];
     leadingIcon?: Snippet;
     showPasswordToggle?: boolean;
+    thousandSeparator?: boolean;
+    prefix?: string;
+    onkeydown?: (e: KeyboardEvent) => void;
   }
 
   let {
@@ -39,15 +47,78 @@
     showRequiredAsterisk = false,
     id = '',
     name = '',
+    min = undefined,
+    max = undefined,
+    step = undefined,
     autocomplete = undefined,
     leadingIcon,
     showPasswordToggle = false,
+    thousandSeparator = false,
+    prefix = '',
+    onkeydown = undefined,
   }: Props = $props();
 
   let passwordVisible = $state(false);
   let effectiveType = $derived(
     type === 'password' ? (passwordVisible ? 'text' : 'password') : type,
   );
+
+  function formatThousands(val: number | string | undefined | null): string {
+    if (val === undefined || val === null || val === '') return '';
+    const clean = String(val).replace(/\D/g, '');
+    if (!clean) return '';
+    const num = parseInt(clean, 10);
+    return isNaN(num) ? '' : num.toLocaleString('id-ID');
+  }
+
+  function handleThousandsInput(e: Event) {
+    const target = e.target as HTMLInputElement;
+    const rawVal = target.value;
+    const cursorPos = target.selectionStart || 0;
+
+    // Hitung berapa banyak digit angka murni di sebelah kiri kursor sebelum reformat
+    const digitsBeforeCursor = rawVal.slice(0, cursorPos).replace(/\D/g, '').length;
+
+    // Ambil seluruh digit murni
+    const cleanDigits = rawVal.replace(/\D/g, '');
+
+    if (!cleanDigits) {
+      value = typeof value === 'number' ? 0 : '';
+      target.value = '';
+      return;
+    }
+
+    const num = parseInt(cleanDigits, 10);
+    const formatted = num.toLocaleString('id-ID');
+
+    value = typeof value === 'number' ? num : cleanDigits;
+    target.value = formatted;
+
+    // Kembalikan posisi kursor agar tetap presisi setelah digit yang diketik
+    let newPos = formatted.length;
+    if (digitsBeforeCursor === 0) {
+      newPos = 0;
+    } else {
+      let count = 0;
+      for (let i = 0; i < formatted.length; i++) {
+        if (/\d/.test(formatted[i])) {
+          count++;
+        }
+        if (count === digitsBeforeCursor) {
+          newPos = i + 1;
+          break;
+        }
+      }
+    }
+    target.setSelectionRange(newPos, newPos);
+  }
+
+  function handleThousandsFocus(e: FocusEvent) {
+    const target = e.target as HTMLInputElement;
+    if (target.value === '0') {
+      target.select();
+    }
+  }
 </script>
 
 <div class="flex flex-col gap-1.5">
@@ -61,7 +132,13 @@
   {/if}
 
   <div class="relative flex items-center">
-    {#if leadingIcon}
+    {#if prefix}
+      <span
+        class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-xs font-bold text-neutral-400 select-none"
+      >
+        {prefix}
+      </span>
+    {:else if leadingIcon}
       <div
         class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-neutral-400"
       >
@@ -69,26 +146,57 @@
       </div>
     {/if}
 
-    <input
-      {id}
-      {name}
-      type={effectiveType}
-      {placeholder}
-      {disabled}
-      {required}
-      {autocomplete}
-      bind:value
-      class="h-12 w-full rounded-xl border bg-white px-3.5 text-sm text-neutral-900 shadow-xs
-        transition-all duration-150
-        placeholder:text-neutral-400
-        focus:ring-4 focus:outline-none
-        disabled:cursor-not-allowed disabled:bg-neutral-50 disabled:text-neutral-400
-        {leadingIcon ? 'pl-11' : 'pl-3.5'}
-        {type === 'password' || showPasswordToggle ? 'pr-11' : 'pr-3.5'}
-        {error
-        ? 'border-danger-400 focus:border-danger-500 focus:ring-danger-500/10'
-        : 'focus:border-primary-500 focus:ring-primary-500/10 border-neutral-200 hover:border-neutral-300'}"
-    />
+    {#if thousandSeparator}
+      <input
+        {id}
+        {name}
+        type="text"
+        inputmode="numeric"
+        {placeholder}
+        {disabled}
+        {required}
+        {autocomplete}
+        {onkeydown}
+        value={formatThousands(value)}
+        oninput={handleThousandsInput}
+        onfocus={handleThousandsFocus}
+        class="h-12 w-full rounded-xl border bg-white font-mono text-sm text-neutral-900
+          shadow-xs transition-all duration-150
+          placeholder:text-neutral-400
+          focus:ring-4 focus:outline-none
+          disabled:cursor-not-allowed disabled:bg-neutral-50 disabled:text-neutral-400
+          {prefix ? 'pl-10' : leadingIcon ? 'pl-11' : 'pl-3.5'}
+          pr-3.5
+          {error
+          ? 'border-danger-400 focus:border-danger-500 focus:ring-danger-500/10'
+          : 'focus:border-primary-500 focus:ring-primary-500/10 border-neutral-200 hover:border-neutral-300'}"
+      />
+    {:else}
+      <input
+        {id}
+        {name}
+        type={effectiveType}
+        {placeholder}
+        {disabled}
+        {required}
+        {autocomplete}
+        {min}
+        {max}
+        {step}
+        {onkeydown}
+        bind:value
+        class="h-12 w-full rounded-xl border bg-white px-3.5 text-sm text-neutral-900 shadow-xs
+          transition-all duration-150
+          placeholder:text-neutral-400
+          focus:ring-4 focus:outline-none
+          disabled:cursor-not-allowed disabled:bg-neutral-50 disabled:text-neutral-400
+          {prefix ? 'pl-10' : leadingIcon ? 'pl-11' : 'pl-3.5'}
+          {type === 'password' || showPasswordToggle ? 'pr-11' : 'pr-3.5'}
+          {error
+          ? 'border-danger-400 focus:border-danger-500 focus:ring-danger-500/10'
+          : 'focus:border-primary-500 focus:ring-primary-500/10 border-neutral-200 hover:border-neutral-300'}"
+      />
+    {/if}
 
     {#if type === 'password' || showPasswordToggle}
       <button

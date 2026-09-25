@@ -5,6 +5,7 @@
 	 */
 	import './layout.css';
 	import { initAuth, isLoading } from '$lib/stores/auth.svelte';
+	import { ToastContainer } from '@erp/ui';
 	import { onMount } from 'svelte';
 
 	let { children } = $props();
@@ -20,6 +21,9 @@
 <svelte:head>
 	<title>ERP Retail — Backoffice</title>
 </svelte:head>
+
+<!-- Wadah Notifikasi Melayang Global (Toast) -->
+<ToastContainer />
 
 {#if !initialized || isLoading()}
 	<!-- Loading screen saat inisialisasi auth -->

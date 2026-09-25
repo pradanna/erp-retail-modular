@@ -6,6 +6,7 @@
     "packages/*"
   ],
   "scripts": {
+    "dev": "npm run dev:backoffice",
     "dev:backoffice": "npm run dev --workspace=apps/backoffice",
     "build:backoffice": "npm run build --workspace=apps/backoffice",
     "lint": "npm run lint --workspaces --if-present",

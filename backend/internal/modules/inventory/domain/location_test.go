@@ -65,7 +65,7 @@ func TestNewLocation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			loc, err := domain.NewLocation(tt.id, tt.code, tt.locName, tt.locType, tt.address)
+			loc, err := domain.NewLocation(tt.id, tt.code, tt.locName, tt.locType, tt.address, nil, nil)
 			if (err != nil) != tt.wantError {
 				t.Fatalf("NewLocation() error = %v, wantError = %v", err, tt.wantError)
 			}
@@ -81,6 +81,72 @@ func TestNewLocation(t *testing.T) {
 	}
 }
 
+func TestLocation_CoordinatesValidation(t *testing.T) {
+	validLat := -6.1914
+	validLng := 106.9126
+	invalidLat := 95.0
+	invalidLng := 190.0
+
+	// Valid coordinates
+	loc, err := domain.NewLocation(
+		"018f0a00-0000-7000-0000-000000000001",
+		"CAB-JKT",
+		"Cabang Jakarta",
+		domain.LocationTypePhysical,
+		"Jakarta",
+		&validLat,
+		&validLng,
+	)
+	if err != nil {
+		t.Fatalf("expected valid location with coordinates, got: %v", err)
+	}
+	if loc.Latitude == nil || *loc.Latitude != validLat {
+		t.Errorf("expected latitude %f, got %v", validLat, loc.Latitude)
+	}
+
+	// Invalid latitude (> 90)
+	_, err = domain.NewLocation(
+		"018f0a00-0000-7000-0000-000000000002",
+		"CAB-ERR",
+		"Cabang Error",
+		domain.LocationTypePhysical,
+		"Error",
+		&invalidLat,
+		&validLng,
+	)
+	if err == nil {
+		t.Error("expected error for latitude > 90, got nil")
+	}
+
+	// Invalid longitude (> 180)
+	_, err = domain.NewLocation(
+		"018f0a00-0000-7000-0000-000000000003",
+		"CAB-ERR2",
+		"Cabang Error 2",
+		domain.LocationTypePhysical,
+		"Error",
+		&validLat,
+		&invalidLng,
+	)
+	if err == nil {
+		t.Error("expected error for longitude > 180, got nil")
+	}
+
+	// Incomplete pair (only lat provided)
+	_, err = domain.NewLocation(
+		"018f0a00-0000-7000-0000-000000000004",
+		"CAB-ERR3",
+		"Cabang Error 3",
+		domain.LocationTypePhysical,
+		"Error",
+		&validLat,
+		nil,
+	)
+	if err == nil {
+		t.Error("expected error for incomplete coordinates pair, got nil")
+	}
+}
+
 func TestLocation_UpdateAndStatus(t *testing.T) {
 	loc, err := domain.NewLocation(
 		"018f0a00-0000-7000-0000-000000000001",
@@ -88,18 +154,29 @@ func TestLocation_UpdateAndStatus(t *testing.T) {
 		"Cabang Bandung Lama",
 		domain.LocationTypePhysical,
 		"Alamat Lama",
+		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("failed to create location: %v", err)
 	}
 
-	// Update details
-	err = loc.UpdateDetails("CAB-BDG-01", "Cabang Bandung Baru", domain.LocationTypeOnline, "Alamat Baru")
+	newLat := -6.8905
+	newLng := 107.6104
+
+	// Update details with coordinates
+	err = loc.UpdateDetails("CAB-BDG-01", "Cabang Bandung Baru", domain.LocationTypeOnline, "Alamat Baru", &newLat, &newLng)
 	if err != nil {
 		t.Fatalf("UpdateDetails failed: %v", err)
 	}
 	if loc.Code != "CAB-BDG-01" || loc.Name != "Cabang Bandung Baru" || loc.Type != domain.LocationTypeOnline || loc.Address != "Alamat Baru" {
 		t.Errorf("unexpected updated details: %s, %s, %s, %s", loc.Code, loc.Name, loc.Type, loc.Address)
+	}
+	if loc.Latitude == nil || *loc.Latitude != newLat {
+		t.Errorf("expected latitude %f, got %v", newLat, loc.Latitude)
+	}
+	if loc.Longitude == nil || *loc.Longitude != newLng {
+		t.Errorf("expected longitude %f, got %v", newLng, loc.Longitude)
 	}
 
 	// Deactivate

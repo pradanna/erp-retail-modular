@@ -132,7 +132,10 @@ func (h *BarcodeHandler) ListByProduct(w http.ResponseWriter, r *http.Request) {
 func (h *BarcodeHandler) Lookup(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "parameter query 'code' wajib diisi"})
+		code = r.URL.Query().Get("barcode")
+	}
+	if code == "" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "parameter query 'code' atau 'barcode' wajib diisi"})
 		return
 	}
 
@@ -148,7 +151,7 @@ func (h *BarcodeHandler) Lookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, ProductLookupResponse{
-		Product:        toProductResponse(product),
+		Product:        toProductResponse(product, false),
 		ScannedBarcode: toBarcodeResponse(barcode),
 	})
 }

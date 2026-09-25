@@ -93,6 +93,20 @@ type StockRepository interface {
 	AtomicMutate(ctx context.Context, productID, locationID string, mutateFn func(item *StockItem) error) (*StockItem, error)
 }
 
+// StockAdjustmentFilter adalah kriteria pencarian untuk riwayat penyesuaian stok.
+type StockAdjustmentFilter struct {
+	LocationID string
+	ProductID  string
+	Page       int
+	Limit      int
+}
+
+// StockAdjustmentRepository adalah interface untuk operasi persistence riwayat Stock Opname.
+type StockAdjustmentRepository interface {
+	Save(ctx context.Context, adj *StockAdjustment) error
+	List(ctx context.Context, filter StockAdjustmentFilter) ([]*StockAdjustment, int, error)
+}
+
 // BarcodeRepository adalah interface (kontrak) untuk operasi persistence ProductBarcode.
 type BarcodeRepository interface {
 	// Save menyimpan barcode baru ke database.
@@ -139,6 +153,9 @@ type SerialUnitRepository interface {
 
 	// ListByLocation mengambil seluruh unit fisik yang berada di suatu lokasi cabang/gudang.
 	ListByLocation(ctx context.Context, locationID string, status *SerialStatus) ([]*SerialUnit, error)
+
+	// List mengambil seluruh unit fisik dengan filter fleksibel (produk, cabang, status, pencarian serial).
+	List(ctx context.Context, productID, locationID *string, status *SerialStatus, search *string) ([]*SerialUnit, error)
 }
 
 // PriceOverrideRepository adalah interface (kontrak) untuk operasi persistence PriceOverride.
@@ -165,6 +182,9 @@ type PriceOverrideRepository interface {
 	// IncrementClaimedQuantity menambah claimed_quantity secara atomik dan aman dari race condition.
 	// Mengembalikan ErrPromoQuotaExhausted jika penambahan ini akan melebihi max_quantity.
 	IncrementClaimedQuantity(ctx context.Context, id string, delta int) error
+
+	// List mengambil daftar seluruh promo harga khusus dengan filter opsional (produk, cabang, status aktif).
+	List(ctx context.Context, productID, locationID *string, isActive *bool) ([]*PriceOverride, error)
 }
 
 // StockTransferFilter adalah kriteria pencarian dokumen mutasi stok.
@@ -228,3 +248,15 @@ type ProductWarrantyRepository interface {
 	// Update memperbarui penugasan garansi produk (misal: penonaktifan).
 	Update(ctx context.Context, pw *ProductWarranty) error
 }
+
+// ProductImageRepository adalah kontrak persistence untuk foto produk.
+type ProductImageRepository interface {
+	Save(ctx context.Context, img *ProductImage) error
+	FindByProductID(ctx context.Context, productID string) ([]*ProductImage, error)
+	FindByID(ctx context.Context, id string) (*ProductImage, error)
+	FindPrimaryByProductID(ctx context.Context, productID string) (*ProductImage, error)
+	Delete(ctx context.Context, id string) error
+	SetPrimary(ctx context.Context, productID, imageID string) error
+	CountByProductID(ctx context.Context, productID string) (int, error)
+}
+

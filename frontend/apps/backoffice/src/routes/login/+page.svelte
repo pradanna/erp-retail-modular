@@ -68,9 +68,9 @@
 			class="absolute inset-0 h-full w-full object-cover object-center brightness-[0.78] contrast-[1.08] filter"
 		/>
 
-		<!-- Gradient Overlay Biru & Slate Gelap untuk Kontras Maksimal -->
+		<!-- Gradient Overlay Obsidian & Slate Gelap untuk Kontras Maksimal -->
 		<div
-			class="absolute inset-0 bg-gradient-to-tr from-slate-950 via-slate-950/80 to-blue-950/70 backdrop-blur-[1px]"
+			class="absolute inset-0 bg-gradient-to-tr from-neutral-950 via-neutral-950/85 to-neutral-900/80 backdrop-blur-[1px]"
 		></div>
 
 		<!-- Konten Showcase -->

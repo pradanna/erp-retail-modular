@@ -89,6 +89,51 @@ func (h *SerialUnitHandler) Register(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, responseList)
 }
 
+// List mengambil daftar seluruh unit fisik berserial dengan filter (produk, cabang, status, pencarian serial).
+// Endpoint: GET /api/v1/inventory/serials
+func (h *SerialUnitHandler) List(w http.ResponseWriter, r *http.Request) {
+	var productID *string
+	if pid := r.URL.Query().Get("product_id"); pid != "" {
+		productID = &pid
+	}
+	var locationID *string
+	if lid := r.URL.Query().Get("location_id"); lid != "" {
+		locationID = &lid
+	}
+	var statusFilter *domain.SerialStatus
+	if s := r.URL.Query().Get("status"); s != "" {
+		st := domain.SerialStatus(s)
+		if st.IsValid() {
+			statusFilter = &st
+		}
+	}
+	var search *string
+	if q := r.URL.Query().Get("search"); q != "" {
+		search = &q
+	}
+
+	query := application.ListSerialUnitsQuery{
+		ProductID:  productID,
+		LocationID: locationID,
+		Status:     statusFilter,
+		Search:     search,
+	}
+
+	details, err := h.listUC.Execute(r.Context(), query)
+	if err != nil {
+		h.logger.Error("gagal mengambil daftar serial unit", "error", err)
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "terjadi kesalahan internal server"})
+		return
+	}
+
+	responseList := make([]SerialUnitResponse, 0, len(details))
+	for _, d := range details {
+		responseList = append(responseList, mapDetailToResponse(d))
+	}
+
+	writeJSON(w, http.StatusOK, responseList)
+}
+
 // ListByProduct mengambil seluruh unit fisik berserial milik suatu produk.
 // Endpoint: GET /api/v1/inventory/products/{id}/serials
 func (h *SerialUnitHandler) ListByProduct(w http.ResponseWriter, r *http.Request) {
@@ -111,16 +156,16 @@ func (h *SerialUnitHandler) ListByProduct(w http.ResponseWriter, r *http.Request
 		Status:    statusFilter,
 	}
 
-	units, err := h.listUC.Execute(r.Context(), query)
+	details, err := h.listUC.Execute(r.Context(), query)
 	if err != nil {
 		h.logger.Error("gagal mengambil daftar serial unit produk", "error", err, "product_id", productID)
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "terjadi kesalahan internal server"})
 		return
 	}
 
-	responseList := make([]SerialUnitResponse, 0, len(units))
-	for _, u := range units {
-		responseList = append(responseList, mapSerialUnitToResponse(u))
+	responseList := make([]SerialUnitResponse, 0, len(details))
+	for _, d := range details {
+		responseList = append(responseList, mapDetailToResponse(d))
 	}
 
 	writeJSON(w, http.StatusOK, responseList)
@@ -131,7 +176,10 @@ func (h *SerialUnitHandler) ListByProduct(w http.ResponseWriter, r *http.Request
 func (h *SerialUnitHandler) Lookup(w http.ResponseWriter, r *http.Request) {
 	sn := r.URL.Query().Get("sn")
 	if sn == "" {
-		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "parameter query 'sn' (serial number) wajib diisi"})
+		sn = r.URL.Query().Get("serial")
+	}
+	if sn == "" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "parameter query 'sn' atau 'serial' (serial number) wajib diisi"})
 		return
 	}
 
@@ -213,6 +261,17 @@ func mapSerialUnitToResponse(u *domain.SerialUnit) SerialUnitResponse {
 		CreatedAt:    u.CreatedAt,
 		UpdatedAt:    u.UpdatedAt,
 	}
+}
+
+// Helper untuk mapping application.SerialUnitDetail ke SerialUnitResponse
+func mapDetailToResponse(d *application.SerialUnitDetail) SerialUnitResponse {
+	resp := mapSerialUnitToResponse(d.Unit)
+	resp.ProductName = d.ProductName
+	resp.ProductSKU = d.ProductSKU
+	resp.ProductBrand = d.ProductBrand
+	resp.LocationName = d.LocationName
+	resp.LocationCode = d.LocationCode
+	return resp
 }
 
 // Helper untuk membuat pointer struct

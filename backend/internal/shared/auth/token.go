@@ -8,12 +8,15 @@ import (
 
 // GenerateToken membuat token JWT baru yang ditandatangani dengan HMAC-SHA256.
 // Fungsi ini berguna untuk autentikasi user saat login maupun untuk keperluan testing.
-func GenerateToken(jwtSecret string, userID, role, locationID string, duration time.Duration) (string, error) {
+func GenerateToken(jwtSecret string, userID, username, name, role, locationID string, duration time.Duration) (string, error) {
 	claims := Claims{
 		UserID:   userID,
+		Username: username,
+		Name:     name,
 		Role:     role,
 		Location: locationID,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   username,
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(duration)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},

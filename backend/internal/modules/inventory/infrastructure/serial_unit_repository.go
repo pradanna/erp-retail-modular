@@ -172,6 +172,43 @@ func (r *mysqlSerialUnitRepository) ListByLocation(ctx context.Context, location
 	return r.scanSerialUnits(rows)
 }
 
+// List mengambil daftar serial unit dengan filter fleksibel (produk, cabang, status, pencarian serial).
+func (r *mysqlSerialUnitRepository) List(ctx context.Context, productID, locationID *string, status *domain.SerialStatus, search *string) ([]*domain.SerialUnit, error) {
+	query := `
+		SELECT id, product_id, location_id, serial_number, status, created_at, updated_at
+		FROM inv_serial_units
+		WHERE 1=1`
+	var args []any
+
+	if productID != nil && *productID != "" {
+		query += ` AND product_id = ?`
+		args = append(args, *productID)
+	}
+	if locationID != nil && *locationID != "" {
+		query += ` AND location_id = ?`
+		args = append(args, *locationID)
+	}
+	if status != nil && *status != "" {
+		norm := domain.NormalizeSerialStatus(string(*status))
+		query += ` AND status = ?`
+		args = append(args, string(norm))
+	}
+	if search != nil && strings.TrimSpace(*search) != "" {
+		query += ` AND serial_number LIKE ?`
+		args = append(args, "%"+strings.TrimSpace(*search)+"%")
+	}
+	query += ` ORDER BY created_at DESC LIMIT 200`
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("gagal query list serial units: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanSerialUnits(rows)
+}
+
+
 // Helper untuk membaca 1 baris hasil scan row
 func (r *mysqlSerialUnitRepository) scanSerialUnit(scanner interface{ Scan(dest ...any) error }) (*domain.SerialUnit, error) {
 	var (

@@ -31,3 +31,10 @@ export class ApiError extends Error {
     this.name = 'ApiError';
   }
 }
+
+/** Opsi generik untuk komponen form dropdown (Select). */
+export interface SelectOption {
+  value: string | number;
+  label: string;
+  disabled?: boolean;
+}

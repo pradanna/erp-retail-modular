@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,22 +13,16 @@ import (
 
 // mysqlProductRepository adalah implementasi konkret dari domain.ProductRepository
 // menggunakan MySQL dan database/sql standar Go.
-//
-// MENGAPA IMPLEMENTASI ADA DI INFRASTRUCTURE?
-// Layer infrastructure tahu tentang detail teknis: SQL dialect, placeholder '?', JSON serialization, dsb.
-// Domain dan use case sama sekali tidak boleh tahu detail ini.
 type mysqlProductRepository struct {
 	db *sql.DB
 }
 
 // NewProductRepository membuat instance repository baru.
-// Mengembalikan domain.ProductRepository (interface), bukan tipe konkret struct-nya.
 func NewProductRepository(db *sql.DB) domain.ProductRepository {
 	return &mysqlProductRepository{db: db}
 }
 
 func (r *mysqlProductRepository) Save(ctx context.Context, p *domain.Product) error {
-	// Simpan AtributVarian sebagai JSON text ke kolom JSON MySQL
 	varianJSON, err := json.Marshal(p.AtributVarian)
 	if err != nil {
 		return fmt.Errorf("gagal marshal atribut_varian: %w", err)
@@ -55,12 +50,13 @@ func (r *mysqlProductRepository) Save(ctx context.Context, p *domain.Product) er
 
 func (r *mysqlProductRepository) FindByID(ctx context.Context, id string) (*domain.Product, error) {
 	query := `
-		SELECT id, sku, category_id, name, brand, description, unit,
-			   purchase_price, selling_price, status,
-			   is_ppn, flag_serial_tracking, weight_gram, atribut_varian,
-			   created_at, updated_at
-		FROM inv_products
-		WHERE id = ?`
+		SELECT p.id, p.sku, p.category_id, p.name, p.brand, p.description, p.unit,
+			   p.purchase_price, p.selling_price, p.status,
+			   p.is_ppn, p.flag_serial_tracking, p.weight_gram, p.atribut_varian,
+			   p.created_at, p.updated_at,
+			   (SELECT url FROM inv_product_images WHERE product_id = p.id AND is_primary = TRUE LIMIT 1) AS primary_image_url
+		FROM inv_products p
+		WHERE p.id = ?`
 
 	row := r.db.QueryRowContext(ctx, query, id)
 	return scanProduct(row)
@@ -68,12 +64,13 @@ func (r *mysqlProductRepository) FindByID(ctx context.Context, id string) (*doma
 
 func (r *mysqlProductRepository) FindBySKU(ctx context.Context, sku string) (*domain.Product, error) {
 	query := `
-		SELECT id, sku, category_id, name, brand, description, unit,
-			   purchase_price, selling_price, status,
-			   is_ppn, flag_serial_tracking, weight_gram, atribut_varian,
-			   created_at, updated_at
-		FROM inv_products
-		WHERE sku = ?`
+		SELECT p.id, p.sku, p.category_id, p.name, p.brand, p.description, p.unit,
+			   p.purchase_price, p.selling_price, p.status,
+			   p.is_ppn, p.flag_serial_tracking, p.weight_gram, p.atribut_varian,
+			   p.created_at, p.updated_at,
+			   (SELECT url FROM inv_product_images WHERE product_id = p.id AND is_primary = TRUE LIMIT 1) AS primary_image_url
+		FROM inv_products p
+		WHERE p.sku = ?`
 
 	row := r.db.QueryRowContext(ctx, query, sku)
 	p, err := scanProduct(row)
@@ -120,21 +117,21 @@ func (r *mysqlProductRepository) List(ctx context.Context, filter domain.Product
 	var args []any
 
 	if filter.Status != nil {
-		whereClause += " AND status = ?"
+		whereClause += " AND p.status = ?"
 		args = append(args, string(*filter.Status))
 	}
 	if filter.CategoryID != nil && *filter.CategoryID != "" {
-		whereClause += " AND category_id = ?"
+		whereClause += " AND p.category_id = ?"
 		args = append(args, *filter.CategoryID)
 	}
 	if filter.Search != nil && *filter.Search != "" {
-		whereClause += " AND (name LIKE ? OR sku LIKE ?)"
+		whereClause += " AND (p.name LIKE ? OR p.sku LIKE ?)"
 		pattern := "%" + *filter.Search + "%"
 		args = append(args, pattern, pattern)
 	}
 
 	// 1. Hitung total
-	countQuery := "SELECT COUNT(*) FROM inv_products" + whereClause
+	countQuery := "SELECT COUNT(*) FROM inv_products p" + whereClause
 	var total int
 	if err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("gagal hitung total produk: %w", err)
@@ -142,11 +139,12 @@ func (r *mysqlProductRepository) List(ctx context.Context, filter domain.Product
 
 	// 2. Ambil data dengan LIMIT dan OFFSET
 	selectQuery := `
-		SELECT id, sku, category_id, name, brand, description, unit,
-			   purchase_price, selling_price, status,
-			   is_ppn, flag_serial_tracking, weight_gram, atribut_varian,
-			   created_at, updated_at
-		FROM inv_products` + whereClause + " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+		SELECT p.id, p.sku, p.category_id, p.name, p.brand, p.description, p.unit,
+			   p.purchase_price, p.selling_price, p.status,
+			   p.is_ppn, p.flag_serial_tracking, p.weight_gram, p.atribut_varian,
+			   p.created_at, p.updated_at,
+			   (SELECT url FROM inv_product_images WHERE product_id = p.id AND is_primary = TRUE LIMIT 1) AS primary_image_url
+		FROM inv_products p` + whereClause + " ORDER BY p.created_at DESC LIMIT ? OFFSET ?"
 
 	queryArgs := append(args, filter.Limit, offset)
 	rows, err := r.db.QueryContext(ctx, selectQuery, queryArgs...)
@@ -177,18 +175,19 @@ func scanProduct(row *sql.Row) (*domain.Product, error) {
 		isPPN, flagSerialTracking             bool
 		varianJSON                            sql.NullString
 		createdAt, updatedAt                  time.Time
+		primaryImageURL                       sql.NullString
 	)
 
 	err := row.Scan(
 		&id, &sku, &categoryID, &name, &brand, &description, &unit,
 		&purchasePrice, &sellingPrice, &statusStr,
 		&isPPN, &flagSerialTracking, &weightGram, &varianJSON,
-		&createdAt, &updatedAt,
+		&createdAt, &updatedAt, &primaryImageURL,
 	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("gagal scan produk: %w", err)
 	}
 
@@ -196,7 +195,7 @@ func scanProduct(row *sql.Row) (*domain.Product, error) {
 		id, sku, categoryID, name, brand, description, unit,
 		purchasePrice, sellingPrice, statusStr,
 		isPPN, flagSerialTracking, weightGram, varianJSON,
-		createdAt, updatedAt,
+		createdAt, updatedAt, primaryImageURL,
 	)
 }
 
@@ -210,13 +209,14 @@ func scanProductRow(rows *sql.Rows) (*domain.Product, error) {
 		isPPN, flagSerialTracking             bool
 		varianJSON                            sql.NullString
 		createdAt, updatedAt                  time.Time
+		primaryImageURL                       sql.NullString
 	)
 
 	err := rows.Scan(
 		&id, &sku, &categoryID, &name, &brand, &description, &unit,
 		&purchasePrice, &sellingPrice, &statusStr,
 		&isPPN, &flagSerialTracking, &weightGram, &varianJSON,
-		&createdAt, &updatedAt,
+		&createdAt, &updatedAt, &primaryImageURL,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gagal scan baris produk: %w", err)
@@ -226,7 +226,7 @@ func scanProductRow(rows *sql.Rows) (*domain.Product, error) {
 		id, sku, categoryID, name, brand, description, unit,
 		purchasePrice, sellingPrice, statusStr,
 		isPPN, flagSerialTracking, weightGram, varianJSON,
-		createdAt, updatedAt,
+		createdAt, updatedAt, primaryImageURL,
 	)
 }
 
@@ -237,6 +237,7 @@ func buildProductFromScan(
 	isPPN, flagSerialTracking bool, weightGram int,
 	varianJSON sql.NullString,
 	createdAt, updatedAt time.Time,
+	primaryImageURL sql.NullString,
 ) (*domain.Product, error) {
 	var catID string
 	if categoryID.Valid {
@@ -255,6 +256,11 @@ func buildProductFromScan(
 		}
 	}
 
+	var primaryURL *string
+	if primaryImageURL.Valid && primaryImageURL.String != "" {
+		primaryURL = &primaryImageURL.String
+	}
+
 	return &domain.Product{
 		ID:                 id,
 		SKU:                sku,
@@ -270,6 +276,7 @@ func buildProductFromScan(
 		FlagSerialTracking: flagSerialTracking,
 		WeightGram:         weightGram,
 		AtributVarian:      atribut,
+		PrimaryImageURL:    primaryURL,
 		CreatedAt:          createdAt,
 		UpdatedAt:          updatedAt,
 	}, nil

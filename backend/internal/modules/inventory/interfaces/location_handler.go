@@ -51,10 +51,12 @@ func (h *LocationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cmd := application.CreateLocationCommand{
-		Code:    req.Code,
-		Name:    req.Name,
-		Type:    domain.LocationType(req.Type),
-		Address: req.Address,
+		Code:      req.Code,
+		Name:      req.Name,
+		Type:      domain.LocationType(req.Type),
+		Address:   req.Address,
+		Latitude:  req.Latitude,
+		Longitude: req.Longitude,
 	}
 
 	id, err := h.createLocation.Execute(r.Context(), cmd)
@@ -133,11 +135,13 @@ func (h *LocationHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cmd := application.UpdateLocationCommand{
-		ID:      id,
-		Code:    req.Code,
-		Name:    req.Name,
-		Type:    domain.LocationType(req.Type),
-		Address: req.Address,
+		ID:        id,
+		Code:      req.Code,
+		Name:      req.Name,
+		Type:      domain.LocationType(req.Type),
+		Address:   req.Address,
+		Latitude:  req.Latitude,
+		Longitude: req.Longitude,
 	}
 
 	if err := h.updateLocation.Execute(r.Context(), cmd); err != nil {
@@ -224,6 +228,8 @@ func toLocationResponse(l *domain.Location) *LocationResponse {
 		Name:      l.Name,
 		Type:      string(l.Type),
 		Address:   l.Address,
+		Latitude:  l.Latitude,
+		Longitude: l.Longitude,
 		IsActive:  l.IsActive,
 		CreatedAt: l.CreatedAt,
 		UpdatedAt: l.UpdatedAt,

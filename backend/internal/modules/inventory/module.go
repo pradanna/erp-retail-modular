@@ -12,6 +12,7 @@ import (
 	"github.com/erp-retail/backend/internal/modules/inventory/domain"
 	"github.com/erp-retail/backend/internal/modules/inventory/infrastructure"
 	inventoryHTTP "github.com/erp-retail/backend/internal/modules/inventory/interfaces"
+	"github.com/erp-retail/backend/internal/shared/auth"
 	"github.com/erp-retail/backend/internal/shared/event"
 )
 
@@ -308,6 +309,7 @@ type Module struct {
 	priceOverrideHandler *inventoryHTTP.PriceOverrideHandler
 	stockTransferHandler *inventoryHTTP.StockTransferHandler
 	warrantyHandler      *inventoryHTTP.WarrantyHandler
+	productImageHandler  *inventoryHTTP.ProductImageHandler
 }
 
 // Service mengembalikan public interface InventoryService untuk digunakan modul lain.
@@ -330,6 +332,7 @@ func New(db *sql.DB, bus event.Bus, logger *slog.Logger) *Module {
 	transferRepo := infrastructure.NewStockTransferRepository(db)
 	warrantyPolicyRepo := infrastructure.NewWarrantyPolicyRepository(db)
 	productWarrantyRepo := infrastructure.NewProductWarrantyRepository(db)
+	stockAdjustmentRepo := infrastructure.NewStockAdjustmentRepository(db)
 
 	// Layer 2: Application — use cases Produk
 	createProductUC := application.NewCreateProductUseCase(productRepo)
@@ -353,7 +356,8 @@ func New(db *sql.DB, bus event.Bus, logger *slog.Logger) *Module {
 	deleteLocationUC := application.NewDeleteLocationUseCase(locationRepo)
 
 	// Layer 2: Application — use cases Stok
-	adjustStockUC := application.NewAdjustStockUseCase(stockRepo, productRepo, locationRepo)
+	adjustStockUC := application.NewAdjustStockUseCase(stockRepo, productRepo, locationRepo, stockAdjustmentRepo, bus)
+	listStockAdjustmentsUC := application.NewListStockAdjustmentsUseCase(stockAdjustmentRepo)
 	getStockUC := application.NewGetStockUseCase(stockRepo)
 	listStockUC := application.NewListStockByLocationUseCase(stockRepo, locationRepo)
 	listAlertsUC := application.NewListLowStockAlertsUseCase(stockRepo)
@@ -368,13 +372,13 @@ func New(db *sql.DB, bus event.Bus, logger *slog.Logger) *Module {
 	// Layer 2: Application — use cases Serial Unit
 	registerSerialUC := application.NewRegisterSerialUnitsUseCase(serialRepo, productRepo, locationRepo)
 	lookupSerialUC := application.NewLookupSerialNumberUseCase(serialRepo, productRepo, locationRepo)
-	listSerialUC := application.NewListSerialUnitsUseCase(serialRepo)
+	listSerialUC := application.NewListSerialUnitsUseCase(serialRepo, productRepo, locationRepo)
 	updateSerialStatusUC := application.NewUpdateSerialStatusUseCase(serialRepo)
 
 	// Layer 2: Application — use cases Price Override
 	createOverrideUC := application.NewCreatePriceOverrideUseCase(priceOverrideRepo, productRepo, locationRepo)
 	getEffectivePriceUC := application.NewGetEffectivePriceUseCase(priceOverrideRepo, productRepo, locationRepo)
-	listOverridesUC := application.NewListPriceOverridesUseCase(priceOverrideRepo)
+	listOverridesUC := application.NewListPriceOverridesUseCase(priceOverrideRepo, productRepo, locationRepo)
 	deactivateOverrideUC := application.NewDeactivatePriceOverrideUseCase(priceOverrideRepo)
 	claimQuotaUC := application.NewClaimPromoQuotaUseCase(priceOverrideRepo)
 
@@ -424,6 +428,7 @@ func New(db *sql.DB, bus event.Bus, logger *slog.Logger) *Module {
 
 	stockHandler := inventoryHTTP.NewStockHandler(
 		adjustStockUC,
+		listStockAdjustmentsUC,
 		getStockUC,
 		listStockUC,
 		listAlertsUC,
@@ -476,6 +481,19 @@ func New(db *sql.DB, bus event.Bus, logger *slog.Logger) *Module {
 		logger,
 	)
 
+	productImageRepo := infrastructure.NewProductImageRepository(db)
+	uploadProductImageUC := application.NewUploadProductImageUseCase(productRepo, productImageRepo)
+	listProductImagesUC := application.NewListProductImagesUseCase(productImageRepo)
+	deleteProductImageUC := application.NewDeleteProductImageUseCase(productImageRepo)
+	setPrimaryProductImageUC := application.NewSetPrimaryProductImageUseCase(productImageRepo)
+	productImageHandler := inventoryHTTP.NewProductImageHandler(
+		uploadProductImageUC,
+		listProductImagesUC,
+		deleteProductImageUC,
+		setPrimaryProductImageUC,
+		logger,
+	)
+
 	return &Module{
 		service: &inventoryServiceImpl{
 			repo:         productRepo,
@@ -495,248 +513,97 @@ func New(db *sql.DB, bus event.Bus, logger *slog.Logger) *Module {
 		priceOverrideHandler: priceOverrideHandler,
 		stockTransferHandler: stockTransferHandler,
 		warrantyHandler:      warrantyHandler,
+		productImageHandler:  productImageHandler,
 	}
 }
 
 // Register mendaftarkan semua route HTTP modul Inventory ke router utama.
 // Fungsi ini dipanggil HANYA oleh main.go, dan HANYA jika modul Inventory aktif di lisensi.
-func (m *Module) Register(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
+func (m *Module) Register(
+	mux *http.ServeMux,
+	authMiddleware func(http.Handler) http.Handler,
+	permService auth.PermissionService,
+	userResolver auth.UserResolver,
+) {
+	// Suntikkan dependency ke handler yang membutuhkan
+	m.productHandler.SetPermissionService(permService)
+	m.stockTransferHandler.SetUserResolver(userResolver)
+
+	// require merangkai autentikasi JWT dan otorisasi granular PBAC
+	require := func(permission string, handler http.HandlerFunc) http.Handler {
+		return authMiddleware(auth.RequirePermission(permission, permService)(handler))
+	}
+
 	// --- Routes Produk ---
+	mux.Handle("POST /api/v1/inventory/products", require("inventory.products.create", m.productHandler.Create))
+	mux.Handle("GET /api/v1/inventory/products", require("inventory.products.view", m.productHandler.List))
+	mux.Handle("GET /api/v1/inventory/products/{id}", require("inventory.products.view", m.productHandler.GetByID))
+	mux.Handle("PUT /api/v1/inventory/products/{id}", require("inventory.products.edit", m.productHandler.Update))
+	mux.Handle("PATCH /api/v1/inventory/products/{id}/status", require("inventory.products.status", m.productHandler.SetStatus))
 
-	// Route: POST /api/v1/inventory/products (Buat produk baru)
-	mux.Handle("POST /api/v1/inventory/products",
-		authMiddleware(http.HandlerFunc(m.productHandler.Create)),
-	)
-
-	// Route: GET /api/v1/inventory/products (Daftar produk dengan paging/filter/search)
-	mux.Handle("GET /api/v1/inventory/products",
-		authMiddleware(http.HandlerFunc(m.productHandler.List)),
-	)
-
-	// Route: GET /api/v1/inventory/products/{id} (Detail 1 produk)
-	mux.Handle("GET /api/v1/inventory/products/{id}",
-		authMiddleware(http.HandlerFunc(m.productHandler.GetByID)),
-	)
-
-	// Route: PUT /api/v1/inventory/products/{id} (Perbarui data produk)
-	mux.Handle("PUT /api/v1/inventory/products/{id}",
-		authMiddleware(http.HandlerFunc(m.productHandler.Update)),
-	)
-
-	// Route: PATCH /api/v1/inventory/products/{id}/status (Ubah status produk)
-	mux.Handle("PATCH /api/v1/inventory/products/{id}/status",
-		authMiddleware(http.HandlerFunc(m.productHandler.SetStatus)),
-	)
+	// --- Routes Foto Produk ---
+	mux.Handle("POST /api/v1/inventory/products/{id}/images", require("inventory.products.edit", m.productImageHandler.Upload))
+	mux.Handle("GET /api/v1/inventory/products/{id}/images", require("inventory.products.view", m.productImageHandler.ListByProduct))
+	mux.Handle("DELETE /api/v1/inventory/products/{id}/images/{image_id}", require("inventory.products.edit", m.productImageHandler.Delete))
+	mux.Handle("PATCH /api/v1/inventory/products/{id}/images/{image_id}/primary", require("inventory.products.edit", m.productImageHandler.SetPrimary))
 
 	// --- Routes Kategori ---
-
-	// Route: POST /api/v1/inventory/categories (Buat kategori baru)
-	mux.Handle("POST /api/v1/inventory/categories",
-		authMiddleware(http.HandlerFunc(m.categoryHandler.Create)),
-	)
-
-	// Route: GET /api/v1/inventory/categories (Daftar seluruh kategori)
-	mux.Handle("GET /api/v1/inventory/categories",
-		authMiddleware(http.HandlerFunc(m.categoryHandler.List)),
-	)
-
-	// Route: PUT /api/v1/inventory/categories/{id} (Perbarui kategori)
-	mux.Handle("PUT /api/v1/inventory/categories/{id}",
-		authMiddleware(http.HandlerFunc(m.categoryHandler.Update)),
-	)
-
-	// Route: DELETE /api/v1/inventory/categories/{id} (Hapus kategori)
-	mux.Handle("DELETE /api/v1/inventory/categories/{id}",
-		authMiddleware(http.HandlerFunc(m.categoryHandler.Delete)),
-	)
+	mux.Handle("POST /api/v1/inventory/categories/upload-image", require("inventory.categories.create", m.categoryHandler.UploadImage))
+	mux.Handle("POST /api/v1/inventory/categories", require("inventory.categories.create", m.categoryHandler.Create))
+	mux.Handle("GET /api/v1/inventory/categories", require("inventory.categories.view", m.categoryHandler.List))
+	mux.Handle("PUT /api/v1/inventory/categories/{id}", require("inventory.categories.edit", m.categoryHandler.Update))
+	mux.Handle("DELETE /api/v1/inventory/categories/{id}", require("inventory.categories.delete", m.categoryHandler.Delete))
 
 	// --- Routes Lokasi / Cabang ---
-
-	// Route: POST /api/v1/inventory/locations (Buat lokasi baru)
-	mux.Handle("POST /api/v1/inventory/locations",
-		authMiddleware(http.HandlerFunc(m.locationHandler.Create)),
-	)
-
-	// Route: GET /api/v1/inventory/locations (Daftar seluruh lokasi)
-	mux.Handle("GET /api/v1/inventory/locations",
-		authMiddleware(http.HandlerFunc(m.locationHandler.List)),
-	)
-
-	// Route: GET /api/v1/inventory/locations/{id} (Detail 1 lokasi)
-	mux.Handle("GET /api/v1/inventory/locations/{id}",
-		authMiddleware(http.HandlerFunc(m.locationHandler.GetByID)),
-	)
-
-	// Route: PUT /api/v1/inventory/locations/{id} (Perbarui informasi lokasi)
-	mux.Handle("PUT /api/v1/inventory/locations/{id}",
-		authMiddleware(http.HandlerFunc(m.locationHandler.Update)),
-	)
-
-	// Route: PATCH /api/v1/inventory/locations/{id}/status (Ubah status aktif lokasi)
-	mux.Handle("PATCH /api/v1/inventory/locations/{id}/status",
-		authMiddleware(http.HandlerFunc(m.locationHandler.SetStatus)),
-	)
-
-	// Route: DELETE /api/v1/inventory/locations/{id} (Hapus lokasi)
-	mux.Handle("DELETE /api/v1/inventory/locations/{id}",
-		authMiddleware(http.HandlerFunc(m.locationHandler.Delete)),
-	)
+	mux.Handle("POST /api/v1/inventory/locations", require("inventory.locations.create", m.locationHandler.Create))
+	mux.Handle("GET /api/v1/inventory/locations", require("inventory.locations.view", m.locationHandler.List))
+	mux.Handle("GET /api/v1/inventory/locations/{id}", require("inventory.locations.view", m.locationHandler.GetByID))
+	mux.Handle("PUT /api/v1/inventory/locations/{id}", require("inventory.locations.edit", m.locationHandler.Update))
+	mux.Handle("PATCH /api/v1/inventory/locations/{id}/status", require("inventory.locations.status", m.locationHandler.SetStatus))
+	mux.Handle("DELETE /api/v1/inventory/locations/{id}", require("inventory.locations.delete", m.locationHandler.Delete))
 
 	// --- Routes Stok per Cabang / Lokasi ---
-
-	// Route: POST /api/v1/inventory/stocks/adjust (Penyesuaian stok manual / Stock Opname)
-	mux.Handle("POST /api/v1/inventory/stocks/adjust",
-		authMiddleware(http.HandlerFunc(m.stockHandler.Adjust)),
-	)
-
-	// Route: PUT /api/v1/inventory/stocks/min-stock (Perbarui batas minimum peringatan stok)
-	mux.Handle("PUT /api/v1/inventory/stocks/min-stock",
-		authMiddleware(http.HandlerFunc(m.stockHandler.UpdateMinStock)),
-	)
-
-	// Route: GET /api/v1/inventory/stocks (Ambil stok spesifik atau daftar stok cabang)
-	mux.Handle("GET /api/v1/inventory/stocks",
-		authMiddleware(http.HandlerFunc(m.stockHandler.Get)),
-	)
-
-	// Route: GET /api/v1/inventory/stocks/alerts (Daftar peringatan stok menipis / low stock)
-	mux.Handle("GET /api/v1/inventory/stocks/alerts",
-		authMiddleware(http.HandlerFunc(m.stockHandler.ListAlerts)),
-	)
+	mux.Handle("POST /api/v1/inventory/stocks/adjust", require("inventory.stocks.adjust", m.stockHandler.Adjust))
+	mux.Handle("GET /api/v1/inventory/stocks/adjustments", require("inventory.stocks.view", m.stockHandler.ListAdjustments))
+	mux.Handle("PUT /api/v1/inventory/stocks/min-stock", require("inventory.stocks.min_stock", m.stockHandler.UpdateMinStock))
+	mux.Handle("GET /api/v1/inventory/stocks", require("inventory.stocks.view", m.stockHandler.Get))
+	mux.Handle("GET /api/v1/inventory/stocks/alerts", require("inventory.stocks.view", m.stockHandler.ListAlerts))
 
 	// --- Routes Barcode Produk ---
-
-	// Route: POST /api/v1/inventory/products/{id}/barcodes (Daftarkan barcode pabrik ke produk)
-	mux.Handle("POST /api/v1/inventory/products/{id}/barcodes",
-		authMiddleware(http.HandlerFunc(m.barcodeHandler.Add)),
-	)
-
-	// Route: GET /api/v1/inventory/products/{id}/barcodes (Daftar barcode milik produk)
-	mux.Handle("GET /api/v1/inventory/products/{id}/barcodes",
-		authMiddleware(http.HandlerFunc(m.barcodeHandler.ListByProduct)),
-	)
-
-	// Route: DELETE /api/v1/inventory/products/{id}/barcodes/{barcode_id} (Hapus barcode)
-	mux.Handle("DELETE /api/v1/inventory/products/{id}/barcodes/{barcode_id}",
-		authMiddleware(http.HandlerFunc(m.barcodeHandler.Delete)),
-	)
-
-	// Route: GET /api/v1/inventory/barcodes/lookup (Scan barcode kasir / cari produk)
-	mux.Handle("GET /api/v1/inventory/barcodes/lookup",
-		authMiddleware(http.HandlerFunc(m.barcodeHandler.Lookup)),
-	)
+	mux.Handle("POST /api/v1/inventory/products/{id}/barcodes", require("inventory.barcodes.manage", m.barcodeHandler.Add))
+	mux.Handle("GET /api/v1/inventory/products/{id}/barcodes", require("inventory.barcodes.view", m.barcodeHandler.ListByProduct))
+	mux.Handle("DELETE /api/v1/inventory/products/{id}/barcodes/{barcode_id}", require("inventory.barcodes.manage", m.barcodeHandler.Delete))
+	mux.Handle("GET /api/v1/inventory/barcodes/lookup", require("inventory.barcodes.view", m.barcodeHandler.Lookup))
 
 	// --- Routes Serial Number & IMEI Tracking ---
-
-	// Route: POST /api/v1/inventory/products/{id}/serials (Daftarkan serial number / IMEI unit fisik)
-	mux.Handle("POST /api/v1/inventory/products/{id}/serials",
-		authMiddleware(http.HandlerFunc(m.serialUnitHandler.Register)),
-	)
-
-	// Route: GET /api/v1/inventory/products/{id}/serials (Daftar serial unit milik suatu produk)
-	mux.Handle("GET /api/v1/inventory/products/{id}/serials",
-		authMiddleware(http.HandlerFunc(m.serialUnitHandler.ListByProduct)),
-	)
-
-	// Route: GET /api/v1/inventory/serials/lookup (Scan barcode serial number kasir & klaim garansi)
-	mux.Handle("GET /api/v1/inventory/serials/lookup",
-		authMiddleware(http.HandlerFunc(m.serialUnitHandler.Lookup)),
-	)
-
-	// Route: PATCH /api/v1/inventory/serials/{id}/status (Update status unit: terjual, retur)
-	mux.Handle("PATCH /api/v1/inventory/serials/{id}/status",
-		authMiddleware(http.HandlerFunc(m.serialUnitHandler.UpdateStatus)),
-	)
+	mux.Handle("GET /api/v1/inventory/serials", require("inventory.serials.view", m.serialUnitHandler.List))
+	mux.Handle("POST /api/v1/inventory/products/{id}/serials", require("inventory.serials.register", m.serialUnitHandler.Register))
+	mux.Handle("GET /api/v1/inventory/products/{id}/serials", require("inventory.serials.view", m.serialUnitHandler.ListByProduct))
+	mux.Handle("GET /api/v1/inventory/serials/lookup", require("inventory.serials.view", m.serialUnitHandler.Lookup))
+	mux.Handle("PATCH /api/v1/inventory/serials/{id}/status", require("inventory.serials.status", m.serialUnitHandler.UpdateStatus))
 
 	// --- Routes Price Override (Promo / Harga Khusus Cabang) ---
-
-	// Route: POST /api/v1/inventory/products/{id}/price-overrides (Daftarkan promo harga cabang)
-	mux.Handle("POST /api/v1/inventory/products/{id}/price-overrides",
-		authMiddleware(http.HandlerFunc(m.priceOverrideHandler.Create)),
-	)
-
-	// Route: GET /api/v1/inventory/products/{id}/price-overrides (Daftar promo harga cabang produk)
-	mux.Handle("GET /api/v1/inventory/products/{id}/price-overrides",
-		authMiddleware(http.HandlerFunc(m.priceOverrideHandler.List)),
-	)
-
-	// Route: GET /api/v1/inventory/price-overrides/effective-price (Hitung harga efektif kasir POS)
-	mux.Handle("GET /api/v1/inventory/price-overrides/effective-price",
-		authMiddleware(http.HandlerFunc(m.priceOverrideHandler.GetEffectivePrice)),
-	)
-
-	// Route: PATCH /api/v1/inventory/price-overrides/{id}/deactivate (Nonaktifkan promo harga cabang)
-	mux.Handle("PATCH /api/v1/inventory/price-overrides/{id}/deactivate",
-		authMiddleware(http.HandlerFunc(m.priceOverrideHandler.Deactivate)),
-	)
-
-	// Route: POST /api/v1/inventory/price-overrides/{id}/claim (Klaim kuota promo saat transaksi kasir)
-	mux.Handle("POST /api/v1/inventory/price-overrides/{id}/claim",
-		authMiddleware(http.HandlerFunc(m.priceOverrideHandler.ClaimQuota)),
-	)
+	mux.Handle("GET /api/v1/inventory/price-overrides", require("inventory.prices.view", m.priceOverrideHandler.ListAll))
+	mux.Handle("POST /api/v1/inventory/products/{id}/price-overrides", require("inventory.prices.create", m.priceOverrideHandler.Create))
+	mux.Handle("GET /api/v1/inventory/products/{id}/price-overrides", require("inventory.prices.view", m.priceOverrideHandler.List))
+	mux.Handle("GET /api/v1/inventory/price-overrides/effective-price", require("inventory.prices.view", m.priceOverrideHandler.GetEffectivePrice))
+	mux.Handle("PATCH /api/v1/inventory/price-overrides/{id}/deactivate", require("inventory.prices.deactivate", m.priceOverrideHandler.Deactivate))
+	mux.Handle("POST /api/v1/inventory/price-overrides/{id}/claim", require("inventory.prices.claim", m.priceOverrideHandler.ClaimQuota))
 
 	// --- Routes Stock Transfer (Mutasi Stok Antar Cabang) ---
-
-	// Route: POST /api/v1/inventory/transfers (Buat permohonan mutasi stok baru)
-	mux.Handle("POST /api/v1/inventory/transfers",
-		authMiddleware(http.HandlerFunc(m.stockTransferHandler.Create)),
-	)
-
-	// Route: GET /api/v1/inventory/transfers (Daftar riwayat transfer stok)
-	mux.Handle("GET /api/v1/inventory/transfers",
-		authMiddleware(http.HandlerFunc(m.stockTransferHandler.List)),
-	)
-
-	// Route: GET /api/v1/inventory/transfers/{id} (Detail dokumen transfer dan item barangnya)
-	mux.Handle("GET /api/v1/inventory/transfers/{id}",
-		authMiddleware(http.HandlerFunc(m.stockTransferHandler.Get)),
-	)
-
-	// Route: POST /api/v1/inventory/transfers/{id}/approve (Setujui permohonan transfer)
-	mux.Handle("POST /api/v1/inventory/transfers/{id}/approve",
-		authMiddleware(http.HandlerFunc(m.stockTransferHandler.Approve)),
-	)
-
-	// Route: POST /api/v1/inventory/transfers/{id}/reject (Tolak permohonan transfer)
-	mux.Handle("POST /api/v1/inventory/transfers/{id}/reject",
-		authMiddleware(http.HandlerFunc(m.stockTransferHandler.Reject)),
-	)
-
-	// Route: POST /api/v1/inventory/transfers/{id}/ship (Konfirmasi pengiriman truk berangkat)
-	mux.Handle("POST /api/v1/inventory/transfers/{id}/ship",
-		authMiddleware(http.HandlerFunc(m.stockTransferHandler.Ship)),
-	)
-
-	// Route: POST /api/v1/inventory/transfers/{id}/receive (Konfirmasi penerimaan di cabang tujuan)
-	mux.Handle("POST /api/v1/inventory/transfers/{id}/receive",
-		authMiddleware(http.HandlerFunc(m.stockTransferHandler.Receive)),
-	)
+	mux.Handle("POST /api/v1/inventory/transfers", require("inventory.transfers.create", m.stockTransferHandler.Create))
+	mux.Handle("GET /api/v1/inventory/transfers", require("inventory.transfers.view", m.stockTransferHandler.List))
+	mux.Handle("GET /api/v1/inventory/transfers/{id}", require("inventory.transfers.view", m.stockTransferHandler.Get))
+	mux.Handle("POST /api/v1/inventory/transfers/{id}/approve", require("inventory.transfers.approve", m.stockTransferHandler.Approve))
+	mux.Handle("POST /api/v1/inventory/transfers/{id}/reject", require("inventory.transfers.approve", m.stockTransferHandler.Reject))
+	mux.Handle("POST /api/v1/inventory/transfers/{id}/ship", require("inventory.transfers.ship", m.stockTransferHandler.Ship))
+	mux.Handle("POST /api/v1/inventory/transfers/{id}/receive", require("inventory.transfers.receive", m.stockTransferHandler.Receive))
 
 	// --- Routes Warranty (Garansi Toko & Pabrik) ---
-
-	// Route: POST /api/v1/inventory/warranties/policies (Buat master kebijakan garansi)
-	mux.Handle("POST /api/v1/inventory/warranties/policies",
-		authMiddleware(http.HandlerFunc(m.warrantyHandler.CreatePolicy)),
-	)
-
-	// Route: GET /api/v1/inventory/warranties/policies (Daftar master kebijakan garansi)
-	mux.Handle("GET /api/v1/inventory/warranties/policies",
-		authMiddleware(http.HandlerFunc(m.warrantyHandler.ListPolicies)),
-	)
-
-	// Route: POST /api/v1/inventory/products/{id}/warranties (Tetapkan garansi ke produk)
-	mux.Handle("POST /api/v1/inventory/products/{id}/warranties",
-		authMiddleware(http.HandlerFunc(m.warrantyHandler.AssignProductWarranty)),
-	)
-
-	// Route: GET /api/v1/inventory/products/{id}/warranties (Lihat garansi aktif produk)
-	mux.Handle("GET /api/v1/inventory/products/{id}/warranties",
-		authMiddleware(http.HandlerFunc(m.warrantyHandler.GetProductWarranties)),
-	)
-
-	// Route: POST /api/v1/inventory/warranties/products/{id}/deactivate (Nonaktifkan garansi produk)
-	mux.Handle("POST /api/v1/inventory/warranties/products/{id}/deactivate",
-		authMiddleware(http.HandlerFunc(m.warrantyHandler.DeactivateProductWarranty)),
-	)
+	mux.Handle("POST /api/v1/inventory/warranties/policies", require("inventory.warranties.manage", m.warrantyHandler.CreatePolicy))
+	mux.Handle("GET /api/v1/inventory/warranties/policies", require("inventory.warranties.view", m.warrantyHandler.ListPolicies))
+	mux.Handle("POST /api/v1/inventory/products/{id}/warranties", require("inventory.warranties.manage", m.warrantyHandler.AssignProductWarranty))
+	mux.Handle("GET /api/v1/inventory/products/{id}/warranties", require("inventory.warranties.view", m.warrantyHandler.GetProductWarranties))
+	mux.Handle("POST /api/v1/inventory/warranties/products/{id}/deactivate", require("inventory.warranties.manage", m.warrantyHandler.DeactivateProductWarranty))
 }
 

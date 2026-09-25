@@ -16,6 +16,10 @@ const (
 	ProductStatusDiscontinued ProductStatus = "discontinued"
 )
 
+var (
+	ErrProductNotFound = errors.New("produk tidak ditemukan")
+)
+
 // Product adalah aggregate root dari modul Inventory.
 //
 // "Aggregate Root" dalam DDD berarti: semua perubahan state untuk sekumpulan entity
@@ -47,6 +51,7 @@ type Product struct {
 
 	Barcodes  []ProductBarcode
 	Images    []ProductImage
+	PrimaryImageURL *string // URL foto utama produk untuk efisiensi thumbnail katalog
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -60,6 +65,27 @@ type ProductImage struct {
 	IsPrimary bool
 	SortOrder int
 	CreatedAt time.Time
+}
+
+// NewProductImage membuat instance valid dari foto produk.
+func NewProductImage(id, productID, url string, isPrimary bool, sortOrder int) (*ProductImage, error) {
+	if id == "" {
+		return nil, errors.New("id gambar tidak boleh kosong")
+	}
+	if productID == "" {
+		return nil, errors.New("product_id tidak boleh kosong")
+	}
+	if url == "" {
+		return nil, errors.New("url gambar tidak boleh kosong")
+	}
+	return &ProductImage{
+		ID:        id,
+		ProductID: productID,
+		URL:       url,
+		IsPrimary: isPrimary,
+		SortOrder: sortOrder,
+		CreatedAt: time.Now(),
+	}, nil
 }
 
 // NewProduct adalah constructor domain — satu-satunya cara yang "sah" membuat Product baru.

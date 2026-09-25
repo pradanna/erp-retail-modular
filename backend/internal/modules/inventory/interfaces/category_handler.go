@@ -3,11 +3,17 @@ package interfaces
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/erp-retail/backend/internal/modules/inventory/application"
 	"github.com/erp-retail/backend/internal/modules/inventory/domain"
+	"github.com/erp-retail/backend/pkg/uid"
 )
 
 // CategoryHandler menangani seluruh endpoint HTTP untuk master kategori.
@@ -139,6 +145,71 @@ func (h *CategoryHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "Kategori berhasil dihapus",
+	})
+}
+
+// UploadImage menangani upload berkas gambar kategori (multipart/form-data).
+func (h *CategoryHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
+	// Batasi ukuran request body multipart hingga 10MB
+	if err := r.ParseMultipartForm(10 << 20); err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "gagal memproses data formulir upload: " + err.Error()})
+		return
+	}
+
+	file, header, err := r.FormFile("image")
+	if err != nil {
+		file, header, err = r.FormFile("file")
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "berkas gambar tidak ditemukan (gunakan form field 'image' atau 'file')"})
+			return
+		}
+	}
+	defer file.Close()
+
+	// Batas ukuran maksimal gambar kategori: 5 MB
+	if header.Size > 5*1024*1024 {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "ukuran berkas gambar melebihi batas maksimal 5 MB"})
+		return
+	}
+
+	// Validasi ekstensi yang diizinkan
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	if ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".webp" {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "format berkas tidak didukung (gunakan JPG, PNG, atau WebP)"})
+		return
+	}
+
+	uploadDir := "./uploads/categories"
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		h.logger.Error("gagal membuat folder uploads/categories", "error", err.Error())
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "gagal menyiapkan folder penyimpanan server"})
+		return
+	}
+
+	imageID := uid.New()
+	targetFileName := fmt.Sprintf("%s%s", imageID, ext)
+	targetFilePath := filepath.Join(uploadDir, targetFileName)
+
+	outFile, err := os.Create(targetFilePath)
+	if err != nil {
+		h.logger.Error("gagal membuat berkas fisik kategori", "error", err.Error())
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "gagal menyimpan berkas di server"})
+		return
+	}
+	defer outFile.Close()
+
+	if _, err := io.Copy(outFile, file); err != nil {
+		_ = os.Remove(targetFilePath)
+		h.logger.Error("gagal menyalin isi berkas gambar kategori", "error", err.Error())
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "gagal menulis data gambar"})
+		return
+	}
+
+	fileURL := fmt.Sprintf("/uploads/categories/%s", targetFileName)
+	h.logger.Info("gambar kategori berhasil diunggah", "filename", targetFileName, "url", fileURL)
+
+	writeJSON(w, http.StatusCreated, map[string]string{
+		"url": fileURL,
 	})
 }
 

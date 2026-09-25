@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/erp-retail/backend/internal/modules/inventory/domain"
+	"github.com/erp-retail/backend/internal/shared/event"
 	"github.com/erp-retail/backend/pkg/uid"
 )
 
@@ -15,28 +16,36 @@ var (
 
 // AdjustStockCommand membawa data input untuk penyesuaian stok (Stock Opname).
 type AdjustStockCommand struct {
-	ProductID   string
-	LocationID  string
-	NewQuantity int
-	Reason      string
+	ProductID      string
+	LocationID     string
+	NewQuantity    int
+	Reason         string
+	AdjustedBy     string
+	AdjustedByName string
 }
 
 // AdjustStockUseCase menangani penyesuaian kuantitas fisik stok per lokasi dengan row-level locking.
 type AdjustStockUseCase struct {
-	stockRepo    domain.StockRepository
-	productRepo  domain.ProductRepository
-	locationRepo domain.LocationRepository
+	stockRepo      domain.StockRepository
+	productRepo    domain.ProductRepository
+	locationRepo   domain.LocationRepository
+	adjustmentRepo domain.StockAdjustmentRepository
+	bus            event.Bus
 }
 
 func NewAdjustStockUseCase(
 	stockRepo domain.StockRepository,
 	productRepo domain.ProductRepository,
 	locationRepo domain.LocationRepository,
+	adjustmentRepo domain.StockAdjustmentRepository,
+	bus event.Bus,
 ) *AdjustStockUseCase {
 	return &AdjustStockUseCase{
-		stockRepo:    stockRepo,
-		productRepo:  productRepo,
-		locationRepo: locationRepo,
+		stockRepo:      stockRepo,
+		productRepo:    productRepo,
+		locationRepo:   locationRepo,
+		adjustmentRepo: adjustmentRepo,
+		bus:            bus,
 	}
 }
 
@@ -70,14 +79,73 @@ func (uc *AdjustStockUseCase) Execute(ctx context.Context, cmd AdjustStockComman
 	}
 
 	// 3. Mutasi stok secara atomik dengan SELECT ... FOR UPDATE
+	var previousQty int
 	item, err := uc.stockRepo.AtomicMutate(ctx, cmd.ProductID, cmd.LocationID, func(item *domain.StockItem) error {
+		previousQty = item.Quantity
 		return item.AdjustQuantity(cmd.NewQuantity)
 	})
 	if err != nil {
 		return nil, err
 	}
 
+	// 4. Rekam jejak riwayat Stock Opname (Audit Trail Ledger)
+	adjID := uid.New()
+	reason := cmd.Reason
+	if reason == "" {
+		reason = "Penyesuaian Fisik Stok (Stock Opname)"
+	}
+	adjustedByName := cmd.AdjustedByName
+	if adjustedByName == "" {
+		adjustedByName = "Staf Toko"
+	}
+
+	if uc.adjustmentRepo != nil {
+		adjustment, err := domain.NewStockAdjustment(
+			adjID,
+			cmd.ProductID,
+			cmd.LocationID,
+			previousQty,
+			cmd.NewQuantity,
+			reason,
+			cmd.AdjustedBy,
+			adjustedByName,
+		)
+		if err == nil {
+			_ = uc.adjustmentRepo.Save(ctx, adjustment)
+		}
+	}
+
+	// 5. Publish event ke Event Bus agar Audit Log sistem dan modul lain mencatatnya
+	if uc.bus != nil {
+		uc.bus.Publish(event.EventStockAdjusted, event.StockAdjustedPayload{
+			AdjustmentID:   adjID,
+			ProductID:      cmd.ProductID,
+			ProductName:    product.Name,
+			LocationID:     cmd.LocationID,
+			LocationName:   location.Name,
+			PreviousQty:    previousQty,
+			NewQty:         cmd.NewQuantity,
+			Difference:     cmd.NewQuantity - previousQty,
+			Reason:         reason,
+			AdjustedBy:     cmd.AdjustedBy,
+			AdjustedByName: adjustedByName,
+		})
+	}
+
 	return item, nil
+}
+
+// ListStockAdjustmentsUseCase menangani pembacaan riwayat catatan stock opname.
+type ListStockAdjustmentsUseCase struct {
+	adjustmentRepo domain.StockAdjustmentRepository
+}
+
+func NewListStockAdjustmentsUseCase(adjustmentRepo domain.StockAdjustmentRepository) *ListStockAdjustmentsUseCase {
+	return &ListStockAdjustmentsUseCase{adjustmentRepo: adjustmentRepo}
+}
+
+func (uc *ListStockAdjustmentsUseCase) Execute(ctx context.Context, filter domain.StockAdjustmentFilter) ([]*domain.StockAdjustment, int, error) {
+	return uc.adjustmentRepo.List(ctx, filter)
 }
 
 // GetStockUseCase menangani query stok spesifik untuk 1 produk di 1 cabang.

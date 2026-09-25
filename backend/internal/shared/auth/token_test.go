@@ -10,7 +10,7 @@ import (
 
 func TestGenerateToken(t *testing.T) {
 	secret := "super-secret-jwt-key-retail-erp-development-12345"
-	token, err := auth.GenerateToken(secret, "usr_admin_01", "superadmin", "loc_pusat_01", 365*24*time.Hour)
+	token, err := auth.GenerateToken(secret, "usr_admin_01", "superadmin", "Administrator Sistem Utama", "superadmin", "loc_pusat_01", 365*24*time.Hour)
 	if err != nil {
 		t.Fatalf("gagal generate token: %v", err)
 	}

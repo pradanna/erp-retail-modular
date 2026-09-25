@@ -8,6 +8,7 @@ import (
 
 	"github.com/erp-retail/backend/internal/modules/inventory/application"
 	"github.com/erp-retail/backend/internal/modules/inventory/domain"
+	"github.com/erp-retail/backend/internal/shared/auth"
 )
 
 // ProductHandler menangani semua HTTP request yang berkaitan dengan endpoint produk.
@@ -28,7 +29,13 @@ type ProductHandler struct {
 	listProducts  *application.ListProductsUseCase
 	updateProduct *application.UpdateProductUseCase
 	setStatus     *application.SetProductStatusUseCase
+	permService   auth.PermissionService
 	logger        *slog.Logger
+}
+
+// SetPermissionService menyuntikkan PermissionService untuk evaluasi otorisasi granular PBAC.
+func (h *ProductHandler) SetPermissionService(ps auth.PermissionService) {
+	h.permService = ps
 }
 
 // NewProductHandler membuat handler baru dengan dependency yang sudah disiapkan.
@@ -187,7 +194,12 @@ func (h *ProductHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, toProductResponse(product))
+	canViewCost := true
+	if claims := auth.GetClaims(r); claims != nil && h.permService != nil {
+		canViewCost = h.permService.HasPermission(claims.Role, "inventory.products.view_cost")
+	}
+
+	writeJSON(w, http.StatusOK, toProductResponse(product, canViewCost))
 }
 
 // List menangani GET /api/v1/inventory/products
@@ -217,9 +229,14 @@ func (h *ProductHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	canViewCost := true
+	if claims := auth.GetClaims(r); claims != nil && h.permService != nil {
+		canViewCost = h.permService.HasPermission(claims.Role, "inventory.products.view_cost")
+	}
+
 	var data []*ProductResponse
 	for _, p := range res.Products {
-		data = append(data, toProductResponse(p))
+		data = append(data, toProductResponse(p, canViewCost))
 	}
 	if data == nil {
 		data = []*ProductResponse{}
@@ -236,23 +253,30 @@ func (h *ProductHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // ---- Helper functions ----
 
-func toProductResponse(p *domain.Product) *ProductResponse {
+func toProductResponse(p *domain.Product, canViewCost bool) *ProductResponse {
+	var purchasePrice *int64
+	if canViewCost {
+		val := p.PurchasePrice
+		purchasePrice = &val
+	}
+
 	return &ProductResponse{
-		ID:            p.ID,
-		SKU:           p.SKU,
-		CategoryID:    p.CategoryID,
-		Name:          p.Name,
-		Brand:         p.Brand,
-		Description:   p.Description,
-		Unit:          p.Unit,
-		PurchasePrice: p.PurchasePrice,
-		SellingPrice:  p.SellingPrice,
+		ID:                 p.ID,
+		SKU:                p.SKU,
+		CategoryID:         p.CategoryID,
+		Name:               p.Name,
+		Brand:              p.Brand,
+		Description:        p.Description,
+		Unit:               p.Unit,
+		PurchasePrice:      purchasePrice,
+		SellingPrice:       p.SellingPrice,
 		Status:             string(p.Status),
 		IsPPN:              p.IsPPN,
 		FlagSerialTracking: p.FlagSerialTracking,
 		WeightGram:         p.WeightGram,
 		AtributVarian:      p.AtributVarian,
-		CreatedAt:     p.CreatedAt,
-		UpdatedAt:     p.UpdatedAt,
+		PrimaryImageURL:    p.PrimaryImageURL,
+		CreatedAt:          p.CreatedAt,
+		UpdatedAt:          p.UpdatedAt,
 	}
 }

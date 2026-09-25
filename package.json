@@ -1,0 +1,13 @@
+{
+  "name": "erp-retail-modular",
+  "private": true,
+  "description": "ERP Retail Modular - Go + SvelteKit Monorepo",
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "dev:frontend": "npm --prefix frontend run dev:backoffice",
+    "dev:backend": "powershell -Command \"cd backend; go run ./cmd/server/main.go\"",
+    "build": "npm --prefix frontend run build:backoffice",
+    "lint": "npm --prefix frontend run lint",
+    "check": "npm --prefix frontend run --workspace=apps/backoffice check"
+  }
+}

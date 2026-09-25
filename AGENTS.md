@@ -79,7 +79,7 @@ Dokumen ini adalah **sumber kebenaran utama (Rules)** yang WAJIB dibaca dan dipa
 
 ### 5.2 Styling & Tema Visual (Tailwind CSS v4)
 - Gunakan **Tailwind CSS v4** dengan engine CSS-first (`@theme`).
-- **Tema Visual:** Clean, modern, dominan **biru** (bukan hijau), palet netral (putih/abu-abu Slate), card-based layout, dan rounded corner moderat.
+- **Tema Visual:** Clean, modern, dominan **Monochrome Obsidian / Black** (identitas resmi Gen-E Enterprise), palet netral (putih/abu-abu Slate), card-based layout, dan rounded corner moderat.
 - Token warna dan tema didefinisikan satu kali di `/packages/ui` via `@theme`, dilarang hardcode kode hex langsung di dalam komponen.
 - Hindari `@apply` berlebihan; tulis utility class Tailwind langsung pada markup komponen.
 - **Standar Icon:** Seluruh icon WAJIB menggunakan **Heroicons** (format SVG outline 24x24 atau Heroicons solid). Dilarang memakai library icon lain tanpa izin.
@@ -114,6 +114,7 @@ Dokumen ini adalah **sumber kebenaran utama (Rules)** yang WAJIB dibaca dan dipa
 - ❌ Hardcode kode warna hex di komponen tanpa melalui token `@theme`.
 - ❌ Menggunakan icon sparkle atau icon di luar standar Heroicons.
 - ❌ Menggunakan emoticon / emoji di dalam UI maupun dokumen sistem.
+- ❌ Membuka browser / browser subagent jika tidak diminta secara eksplisit oleh user.
 
 ---
 

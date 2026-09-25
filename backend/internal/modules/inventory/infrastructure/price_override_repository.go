@@ -290,3 +290,36 @@ func (r *mysqlPriceOverrideRepository) scanPriceOverrides(rows *sql.Rows) ([]*do
 
 	return list, nil
 }
+
+// List mengambil daftar seluruh promo harga khusus dengan filter fleksibel (produk, cabang, status aktif).
+func (r *mysqlPriceOverrideRepository) List(ctx context.Context, productID, locationID *string, isActive *bool) ([]*domain.PriceOverride, error) {
+	query := `
+		SELECT id, product_id, location_id, promotional_price, max_quantity, claimed_quantity,
+		       start_date, end_date, reason, is_active, created_at, updated_at
+		FROM inv_price_overrides
+		WHERE 1=1`
+	var args []any
+
+	if productID != nil && *productID != "" {
+		query += ` AND product_id = ?`
+		args = append(args, *productID)
+	}
+	if locationID != nil && *locationID != "" {
+		query += ` AND location_id = ?`
+		args = append(args, *locationID)
+	}
+	if isActive != nil {
+		query += ` AND is_active = ?`
+		args = append(args, *isActive)
+	}
+	query += ` ORDER BY created_at DESC LIMIT 200`
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("gagal query list price overrides: %w", err)
+	}
+	defer rows.Close()
+
+	return r.scanPriceOverrides(rows)
+}
+

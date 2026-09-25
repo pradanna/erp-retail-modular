@@ -133,6 +133,7 @@ func (r *mysqlBarcodeRepository) FindProductByBarcode(ctx context.Context, code 
 			p.purchase_price, p.selling_price, p.status,
 			p.is_ppn, p.flag_serial_tracking, p.weight_gram, p.atribut_varian,
 			p.created_at, p.updated_at,
+			(SELECT url FROM inv_product_images WHERE product_id = p.id AND is_primary = TRUE LIMIT 1) AS primary_image_url,
 			b.id, b.product_id, b.barcode, b.is_primary, b.created_at
 		FROM inv_barcodes b
 		JOIN inv_products p ON b.product_id = p.id
@@ -148,6 +149,7 @@ func (r *mysqlBarcodeRepository) FindProductByBarcode(ctx context.Context, code 
 		weightGram                            int
 		varianJSON                            sql.NullString
 		pCreatedAt, pUpdatedAt                time.Time
+		primaryImageURL                       sql.NullString
 		bID, bProductID, bCode                string
 		bIsPrimary                            bool
 		bCreatedAt                            time.Time
@@ -157,7 +159,7 @@ func (r *mysqlBarcodeRepository) FindProductByBarcode(ctx context.Context, code 
 		&pID, &sku, &categoryID, &name, &brand, &description, &unit,
 		&purchasePrice, &sellingPrice, &statusStr,
 		&isPPN, &flagSerialTracking, &weightGram, &varianJSON,
-		&pCreatedAt, &pUpdatedAt,
+		&pCreatedAt, &pUpdatedAt, &primaryImageURL,
 		&bID, &bProductID, &bCode, &bIsPrimary, &bCreatedAt,
 	)
 	if err != nil {
@@ -171,7 +173,7 @@ func (r *mysqlBarcodeRepository) FindProductByBarcode(ctx context.Context, code 
 		pID, sku, categoryID, name, brand, description, unit,
 		purchasePrice, sellingPrice, statusStr,
 		isPPN, flagSerialTracking, weightGram, varianJSON,
-		pCreatedAt, pUpdatedAt,
+		pCreatedAt, pUpdatedAt, primaryImageURL,
 	)
 	if err != nil {
 		return nil, nil, err

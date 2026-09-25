@@ -14,6 +14,7 @@ import (
 	"github.com/erp-retail/backend/internal/platform/database"
 	"github.com/erp-retail/backend/internal/platform/docs"
 	"github.com/erp-retail/backend/internal/platform/logger"
+	"github.com/erp-retail/backend/internal/shared/audit"
 	"github.com/erp-retail/backend/internal/shared/auth"
 	"github.com/erp-retail/backend/internal/shared/event"
 	"github.com/erp-retail/backend/internal/shared/license"
@@ -67,29 +68,53 @@ func main() {
 	// - GET /openapi.yaml -> Raw OpenAPI 3.0 specification
 	docs.Register(mux)
 
+	// Pastikan folder uploads tersedia dan daftarkan static file server
+	_ = os.MkdirAll("./uploads/products", 0755)
+	_ = os.MkdirAll("./uploads/categories", 0755)
+	mux.Handle("GET /uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))))
+
 	// ── 7. Mount middleware auth ─────────────────────────────────────────────
 	// auth.Middleware mengembalikan fungsi pembungkus handler.
 	// Pola ini disebut "middleware chain" atau "decorator pattern".
 	authMiddleware := auth.Middleware(cfg.JWTSecret)
 
-	// ── 7.5 Inisialisasi & Mount Shared Context: Autentikasi & Pengguna ───────
-	// Auth adalah Shared Context yang selalu aktif untuk semua instalasi ERP
+	// ── 7.5 Inisialisasi & Mount Shared Context: Autentikasi, Pengguna & PBAC ───────
+	// Auth & Hak Akses (PBAC) adalah Shared Context yang selalu aktif untuk semua instalasi ERP
 	userRepo := auth.NewUserRepository(db)
 	authService := auth.NewService(userRepo, cfg.JWTSecret, 24*time.Hour)
-	authHandler := auth.NewHandler(authService, log)
+
+	permRepo := auth.NewPermissionRepository(db)
+	initCtx, initCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	permService, err := auth.NewPermissionService(initCtx, permRepo)
+	initCancel()
+	if err != nil {
+		log.Error("gagal memuat permission service", "error", err)
+		os.Exit(1)
+	}
+
+	authHandler := auth.NewHandler(authService, permService, log)
 	authHandler.RegisterRoutes(mux, authMiddleware)
-	log.Info("shared context auth & users di-mount")
+	log.Info("shared context auth, users & pbac di-mount")
+
+	// ── 7.6 Inisialisasi & Mount Shared Context: Audit Log ──────────────────
+	// Audit Log adalah fondasi akuntabilitas yang selalu aktif untuk merekam jejak aktivitas staf/admin
+	auditRepo := audit.NewRepository(db)
+	auditService := audit.NewService(auditRepo, log)
+	auditService.SubscribeEventBus(bus)
+	auditHandler := audit.NewHandler(auditService, permService, log)
+	auditHandler.RegisterRoutes(mux, authMiddleware)
+	log.Info("shared context audit log di-mount dan subscribe ke event bus")
 
 	// ── 8. Mount Modul Berdasarkan Lisensi ──────────────────────────────────
 	// INI ADALAH INTI DARI MEKANISME LISENSI:
-	// Modul yang tidak di-unlock TIDAK AKA N di-mount ke router maupun event bus.
+	// Modul yang tidak di-unlock TIDAK AKAN di-mount ke router maupun event bus.
 	// Route-nya tidak terdaftar, handler-nya tidak ada, subscriber event-nya tidak subscribe.
 	// Bukan sekadar disembunyikan di UI — betul-betul tidak ada di server.
 
 	if lic.Enabled("inventory") {
 		inventoryMod := inventory.New(db, bus, log)
-		inventoryMod.Register(mux, authMiddleware)
-		log.Info("modul inventory di-mount")
+		inventoryMod.Register(mux, authMiddleware, permService, authService)
+		log.Info("modul inventory di-mount dengan otorisasi pbac")
 	}
 
 	// Tambahkan modul lain di sini seiring dikembangkan:
@@ -156,8 +181,13 @@ func main() {
 // 3. Jika header izin cocok, browser melanjutkan request asli
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Izinkan origin frontend dev server
-		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
+		// Izinkan origin frontend dev server (mendukung port 5173, 5174, dll)
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
+		}
 		// Method HTTP yang diizinkan
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		// Header yang boleh dikirim oleh frontend

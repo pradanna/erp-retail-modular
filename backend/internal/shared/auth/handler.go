@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -10,19 +11,21 @@ import (
 
 // Handler menangani request HTTP untuk autentikasi dan manajemen staf.
 type Handler struct {
-	service *Service
-	logger  *slog.Logger
+	service     *Service
+	permService PermissionService
+	logger      *slog.Logger
 }
 
-// NewHandler membuat instance baru HTTP Handler untuk auth.
-func NewHandler(service *Service, logger *slog.Logger) *Handler {
+// NewHandler membuat instance baru HTTP Handler untuk auth dan RBAC/PBAC.
+func NewHandler(service *Service, permService PermissionService, logger *slog.Logger) *Handler {
 	return &Handler{
-		service: service,
-		logger:  logger,
+		service:     service,
+		permService: permService,
+		logger:      logger,
 	}
 }
 
-// RegisterRoutes mendaftarkan seluruh endpoint autentikasi dan pengguna ke router http.ServeMux.
+// RegisterRoutes mendaftarkan seluruh endpoint autentikasi, staf, dan matriks hak akses ke http.ServeMux.
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
 	// Endpoint Publik
 	mux.HandleFunc("POST /api/v1/auth/login", h.Login)
@@ -32,11 +35,21 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Ha
 	mux.Handle("POST /api/v1/auth/verify-password", authMiddleware(http.HandlerFunc(h.VerifyPassword)))
 	mux.Handle("POST /api/v1/auth/change-password", authMiddleware(http.HandlerFunc(h.ChangePassword)))
 
-	// Endpoint Manajemen Pengguna (Staf)
-	mux.Handle("GET /api/v1/users", authMiddleware(http.HandlerFunc(h.ListUsers)))
-	mux.Handle("POST /api/v1/users", authMiddleware(http.HandlerFunc(h.CreateUser)))
-	mux.Handle("GET /api/v1/users/{id}", authMiddleware(http.HandlerFunc(h.GetUser)))
-	mux.Handle("PATCH /api/v1/users/{id}/status", authMiddleware(http.HandlerFunc(h.SetUserStatus)))
+	// Endpoint Manajemen Pengguna (Staf) - Diproteksi Izin PBAC
+	mux.Handle("GET /api/v1/users", authMiddleware(RequirePermission("users.view", h.permService)(http.HandlerFunc(h.ListUsers))))
+	mux.Handle("POST /api/v1/users", authMiddleware(RequirePermission("users.create", h.permService)(http.HandlerFunc(h.CreateUser))))
+	mux.Handle("GET /api/v1/users/{id}", authMiddleware(RequirePermission("users.view", h.permService)(http.HandlerFunc(h.GetUser))))
+	mux.Handle("PATCH /api/v1/users/{id}/status", authMiddleware(RequirePermission("users.edit", h.permService)(http.HandlerFunc(h.SetUserStatus))))
+
+	// Endpoint Matriks Hak Akses & Peran (PBAC)
+	mux.Handle("GET /api/v1/permissions", authMiddleware(RequirePermission("roles.view", h.permService)(http.HandlerFunc(h.ListPermissions))))
+	mux.Handle("GET /api/v1/roles/matrix", authMiddleware(RequirePermission("roles.view", h.permService)(http.HandlerFunc(h.GetRolePermissionsMatrix))))
+	mux.Handle("PUT /api/v1/roles/{role}/permissions", authMiddleware(RequirePermission("roles.manage", h.permService)(http.HandlerFunc(h.UpdateRolePermissions))))
+}
+
+// UpdateRolePermissionsRequest request body untuk memperbarui izin satu peran.
+type UpdateRolePermissionsRequest struct {
+	Permissions []string `json:"permissions"`
 }
 
 // LoginRequest request body untuk login.
@@ -208,14 +221,8 @@ func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, map[string]string{"message": "kata sandi berhasil diperbarui"})
 }
 
-// ListUsers menampilkan daftar staf pengguna (hanya superadmin dan owner).
+// ListUsers menampilkan daftar staf pengguna (diproteksi izin users.view).
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	if claims == nil || (claims.Role != string(UserRoleSuperadmin) && claims.Role != string(UserRoleOwner)) {
-		h.writeError(w, http.StatusForbidden, "hanya superadmin atau owner yang dapat melihat daftar pengguna")
-		return
-	}
-
 	var roleFilter *UserRole
 	if rParam := r.URL.Query().Get("role"); rParam != "" {
 		rVal := UserRole(rParam)
@@ -246,14 +253,8 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, resp)
 }
 
-// CreateUser mendaftarkan staf/pengguna baru ke sistem.
+// CreateUser mendaftarkan staf/pengguna baru ke sistem (diproteksi izin users.create).
 func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	if claims == nil || (claims.Role != string(UserRoleSuperadmin) && claims.Role != string(UserRoleOwner)) {
-		h.writeError(w, http.StatusForbidden, "hanya superadmin atau owner yang dapat mendaftarkan staf baru")
-		return
-	}
-
 	var req CreateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.writeError(w, http.StatusBadRequest, "body request tidak valid")
@@ -283,14 +284,8 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusCreated, toUserResponse(user))
 }
 
-// GetUser mengambil detail 1 staf berdasarkan ID.
+// GetUser mengambil detail 1 staf berdasarkan ID (diproteksi izin users.view).
 func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	if claims == nil || (claims.Role != string(UserRoleSuperadmin) && claims.Role != string(UserRoleOwner)) {
-		h.writeError(w, http.StatusForbidden, "hanya superadmin atau owner yang dapat melihat detail staf")
-		return
-	}
-
 	id := r.PathValue("id")
 	if id == "" {
 		h.writeError(w, http.StatusBadRequest, "parameter ID wajib diisi")
@@ -311,14 +306,8 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, toUserResponse(user))
 }
 
-// SetUserStatus mengubah status aktif/nonaktif staf.
+// SetUserStatus mengubah status aktif/nonaktif staf (diproteksi izin users.edit).
 func (h *Handler) SetUserStatus(w http.ResponseWriter, r *http.Request) {
-	claims := GetClaims(r)
-	if claims == nil || (claims.Role != string(UserRoleSuperadmin) && claims.Role != string(UserRoleOwner)) {
-		h.writeError(w, http.StatusForbidden, "hanya superadmin atau owner yang dapat mengubah status staf")
-		return
-	}
-
 	id := r.PathValue("id")
 	if id == "" {
 		h.writeError(w, http.StatusBadRequest, "parameter ID wajib diisi")
@@ -343,6 +332,64 @@ func (h *Handler) SetUserStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.writeJSON(w, http.StatusOK, toUserResponse(user))
+}
+
+// ListPermissions mengambil daftar seluruh izin kapabilitas sistem (roles.view).
+func (h *Handler) ListPermissions(w http.ResponseWriter, r *http.Request) {
+	matrix, err := h.permService.GetMatrix(r.Context())
+	if err != nil {
+		h.logger.Error("gagal mengambil daftar izin", "error", err)
+		h.writeError(w, http.StatusInternalServerError, "gagal mengambil daftar izin")
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, matrix.Permissions)
+}
+
+// GetRolePermissionsMatrix mengambil matriks lengkap peran dan izin untuk antarmuka Backoffice (roles.view).
+func (h *Handler) GetRolePermissionsMatrix(w http.ResponseWriter, r *http.Request) {
+	matrix, err := h.permService.GetMatrix(r.Context())
+	if err != nil {
+		h.logger.Error("gagal mengambil matriks izin peran", "error", err)
+		h.writeError(w, http.StatusInternalServerError, "gagal mengambil matriks izin peran")
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, matrix)
+}
+
+// UpdateRolePermissions memperbarui konfigurasi izin untuk peran tertentu (roles.manage).
+func (h *Handler) UpdateRolePermissions(w http.ResponseWriter, r *http.Request) {
+	roleName := r.PathValue("role")
+	if roleName == "" {
+		h.writeError(w, http.StatusBadRequest, "parameter role wajib diisi")
+		return
+	}
+
+	var req UpdateRolePermissionsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeError(w, http.StatusBadRequest, "body request tidak valid")
+		return
+	}
+
+	if err := h.permService.UpdateRolePermissions(r.Context(), roleName, req.Permissions); err != nil {
+		switch {
+		case errors.Is(err, ErrCannotModifyOwner):
+			h.writeError(w, http.StatusForbidden, err.Error())
+		case errors.Is(err, ErrRoleNotFound):
+			h.writeError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrPermissionNotFound):
+			h.writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			h.logger.Error("gagal memperbarui izin peran", "role", roleName, "error", err)
+			h.writeError(w, http.StatusInternalServerError, "gagal memperbarui izin peran")
+		}
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]string{
+		"message": fmt.Sprintf("hak akses peran '%s' berhasil diperbarui", roleName),
+	})
 }
 
 func toUserResponse(u *User) UserResponse {

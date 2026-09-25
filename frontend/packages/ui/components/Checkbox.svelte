@@ -26,14 +26,19 @@
   }: Props = $props();
 </script>
 
-<label for={id} class="inline-flex items-center gap-2.5 cursor-pointer select-none text-sm text-neutral-600 {disabled ? 'cursor-not-allowed opacity-50' : 'hover:text-neutral-900'}">
+<label
+  for={id}
+  class="inline-flex cursor-pointer items-center gap-2.5 text-sm text-neutral-600 select-none {disabled
+    ? 'cursor-not-allowed opacity-50'
+    : 'hover:text-neutral-900'}"
+>
   <input
     {id}
     {name}
     type="checkbox"
     {disabled}
     bind:checked
-    class="h-4.5 w-4.5 rounded border-neutral-300 text-primary-600 accent-primary-600 focus:ring-primary-500 transition-colors cursor-pointer"
+    class="text-primary-600 accent-primary-600 focus:ring-primary-500 h-4.5 w-4.5 cursor-pointer rounded border-neutral-300 transition-colors"
   />
   {#if label}
     <span class="text-sm font-normal text-neutral-600 select-none">{label}</span>

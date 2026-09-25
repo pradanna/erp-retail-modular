@@ -171,27 +171,79 @@ type ListSerialUnitsQuery struct {
 	ProductID  *string
 	LocationID *string
 	Status     *domain.SerialStatus
+	Search     *string
 }
 
-// ListSerialUnitsUseCase menangani pengambilan daftar serial unit fisik dengan filter.
+// ListSerialUnitsUseCase menangani pengambilan daftar serial unit fisik dengan filter dan metadata produk & lokasi.
 type ListSerialUnitsUseCase struct {
-	serialRepo domain.SerialUnitRepository
+	serialRepo   domain.SerialUnitRepository
+	productRepo  domain.ProductRepository
+	locationRepo domain.LocationRepository
 }
 
 // NewListSerialUnitsUseCase membuat instance baru ListSerialUnitsUseCase.
-func NewListSerialUnitsUseCase(serialRepo domain.SerialUnitRepository) *ListSerialUnitsUseCase {
-	return &ListSerialUnitsUseCase{serialRepo: serialRepo}
+func NewListSerialUnitsUseCase(
+	serialRepo domain.SerialUnitRepository,
+	productRepo domain.ProductRepository,
+	locationRepo domain.LocationRepository,
+) *ListSerialUnitsUseCase {
+	return &ListSerialUnitsUseCase{
+		serialRepo:   serialRepo,
+		productRepo:  productRepo,
+		locationRepo: locationRepo,
+	}
 }
 
-// Execute mengambil daftar unit fisik sesuai kriteria.
-func (uc *ListSerialUnitsUseCase) Execute(ctx context.Context, q ListSerialUnitsQuery) ([]*domain.SerialUnit, error) {
-	if q.ProductID != nil && *q.ProductID != "" {
-		return uc.serialRepo.ListByProduct(ctx, *q.ProductID, q.Status)
+// Execute mengambil daftar unit fisik beserta metadata produk dan cabang.
+func (uc *ListSerialUnitsUseCase) Execute(ctx context.Context, q ListSerialUnitsQuery) ([]*SerialUnitDetail, error) {
+	units, err := uc.serialRepo.List(ctx, q.ProductID, q.LocationID, q.Status, q.Search)
+	if err != nil {
+		return nil, err
 	}
-	if q.LocationID != nil && *q.LocationID != "" {
-		return uc.serialRepo.ListByLocation(ctx, *q.LocationID, q.Status)
+
+	prodCache := make(map[string]*domain.Product)
+	locCache := make(map[string]*domain.Location)
+	details := make([]*SerialUnitDetail, 0, len(units))
+
+	for _, u := range units {
+		d := &SerialUnitDetail{Unit: u}
+
+		if p, ok := prodCache[u.ProductID]; ok {
+			if p != nil {
+				d.ProductName = p.Name
+				d.ProductSKU = p.SKU
+				d.ProductBrand = p.Brand
+			}
+		} else {
+			if p, err := uc.productRepo.FindByID(ctx, u.ProductID); err == nil && p != nil {
+				prodCache[u.ProductID] = p
+				d.ProductName = p.Name
+				d.ProductSKU = p.SKU
+				d.ProductBrand = p.Brand
+			} else {
+				prodCache[u.ProductID] = nil
+			}
+		}
+
+		if l, ok := locCache[u.LocationID]; ok {
+			if l != nil {
+				d.LocationName = l.Name
+				d.LocationCode = l.Code
+			}
+		} else {
+			if l, err := uc.locationRepo.FindByID(ctx, u.LocationID); err == nil && l != nil {
+				locCache[u.LocationID] = l
+				d.LocationName = l.Name
+				d.LocationCode = l.Code
+			} else {
+				locCache[u.LocationID] = nil
+			}
+		}
+
+		details = append(details, d)
 	}
-	return nil, errors.New("wajib menyertakan product_id atau location_id untuk filter daftar serial unit")
+
+	return details, nil
 }
 
 // UpdateSerialStatusCommand adalah parameter untuk memperbarui status serial unit.
@@ -217,7 +269,12 @@ func (uc *UpdateSerialStatusUseCase) Execute(ctx context.Context, cmd UpdateSeri
 		return nil, err
 	}
 
-	switch cmd.NewStatus {
+	normStatus := domain.NormalizeSerialStatus(string(cmd.NewStatus))
+	switch normStatus {
+	case domain.SerialStatusAvailable:
+		if err := unit.MarkAsAvailable(); err != nil {
+			return nil, err
+		}
 	case domain.SerialStatusSold:
 		if err := unit.MarkAsSold(); err != nil {
 			return nil, err

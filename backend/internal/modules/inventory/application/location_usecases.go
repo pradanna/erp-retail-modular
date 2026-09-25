@@ -16,10 +16,12 @@ var (
 
 // CreateLocationCommand membawa data input untuk pembuatan lokasi/cabang baru.
 type CreateLocationCommand struct {
-	Code    string
-	Name    string
-	Type    domain.LocationType
-	Address string
+	Code      string
+	Name      string
+	Type      domain.LocationType
+	Address   string
+	Latitude  *float64
+	Longitude *float64
 }
 
 // CreateLocationUseCase menangani proses pembuatan lokasi baru.
@@ -45,7 +47,7 @@ func (uc *CreateLocationUseCase) Execute(ctx context.Context, cmd CreateLocation
 	locationID := uid.New()
 
 	// 3. Buat entity domain dengan validasi invariant internal
-	location, err := domain.NewLocation(locationID, cmd.Code, cmd.Name, cmd.Type, cmd.Address)
+	location, err := domain.NewLocation(locationID, cmd.Code, cmd.Name, cmd.Type, cmd.Address, cmd.Latitude, cmd.Longitude)
 	if err != nil {
 		return "", err
 	}
@@ -98,11 +100,13 @@ func (uc *GetLocationUseCase) Execute(ctx context.Context, id string) (*domain.L
 
 // UpdateLocationCommand membawa data pembaruan informasi lokasi.
 type UpdateLocationCommand struct {
-	ID      string
-	Code    string
-	Name    string
-	Type    domain.LocationType
-	Address string
+	ID        string
+	Code      string
+	Name      string
+	Type      domain.LocationType
+	Address   string
+	Latitude  *float64
+	Longitude *float64
 }
 
 // UpdateLocationUseCase menangani pembaruan nama, kode, tipe, dan alamat lokasi.
@@ -138,7 +142,7 @@ func (uc *UpdateLocationUseCase) Execute(ctx context.Context, cmd UpdateLocation
 		}
 	}
 
-	if err := loc.UpdateDetails(cmd.Code, cmd.Name, cmd.Type, cmd.Address); err != nil {
+	if err := loc.UpdateDetails(cmd.Code, cmd.Name, cmd.Type, cmd.Address, cmd.Latitude, cmd.Longitude); err != nil {
 		return err
 	}
 

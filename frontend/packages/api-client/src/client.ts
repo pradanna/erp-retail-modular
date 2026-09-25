@@ -47,9 +47,11 @@ interface FetchOptions {
 export async function fetchApi<T>(path: string, options: FetchOptions = {}): Promise<T> {
   const { method = 'GET', body, token, headers = {} } = options;
 
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+
   // Susun header request
   const requestHeaders: Record<string, string> = {
-    'Content-Type': 'application/json',
+    ...(!isFormData ? { 'Content-Type': 'application/json' } : {}),
     ...headers,
   };
 
@@ -62,7 +64,7 @@ export async function fetchApi<T>(path: string, options: FetchOptions = {}): Pro
     method,
     headers: requestHeaders,
     // Hanya sertakan body untuk method non-GET
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: body !== undefined ? (isFormData ? (body as BodyInit) : JSON.stringify(body)) : undefined,
   });
 
   // Jika response bukan 2xx, parse error body dan lempar ApiError

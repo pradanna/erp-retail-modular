@@ -167,14 +167,42 @@ func (uc *GetEffectivePriceUseCase) Execute(ctx context.Context, productID, loca
 	return res, nil
 }
 
-// ListPriceOverridesUseCase mengambil riwayat dan daftar promo untuk suatu produk.
+// PriceOverrideDetail menampung data promo harga beserta info nama produk, sku, harga normal, dan cabang.
+type PriceOverrideDetail struct {
+	Override     *domain.PriceOverride
+	ProductName  string
+	ProductSKU   string
+	ProductBrand string
+	BasePrice    int64
+	LocationName string
+	LocationCode string
+}
+
+// ListAllPriceOverridesQuery adalah parameter pencarian daftar promo harga cabang.
+type ListAllPriceOverridesQuery struct {
+	ProductID  *string
+	LocationID *string
+	IsActive   *bool
+}
+
+// ListPriceOverridesUseCase mengambil riwayat dan daftar promo untuk suatu produk atau secara global.
 type ListPriceOverridesUseCase struct {
-	repo domain.PriceOverrideRepository
+	repo         domain.PriceOverrideRepository
+	productRepo  domain.ProductRepository
+	locationRepo domain.LocationRepository
 }
 
 // NewListPriceOverridesUseCase membuat instance baru ListPriceOverridesUseCase.
-func NewListPriceOverridesUseCase(repo domain.PriceOverrideRepository) *ListPriceOverridesUseCase {
-	return &ListPriceOverridesUseCase{repo: repo}
+func NewListPriceOverridesUseCase(
+	repo domain.PriceOverrideRepository,
+	productRepo domain.ProductRepository,
+	locationRepo domain.LocationRepository,
+) *ListPriceOverridesUseCase {
+	return &ListPriceOverridesUseCase{
+		repo:         repo,
+		productRepo:  productRepo,
+		locationRepo: locationRepo,
+	}
 }
 
 // Execute mengambil daftar price overrides milik produk tertentu.
@@ -183,6 +211,60 @@ func (uc *ListPriceOverridesUseCase) Execute(ctx context.Context, productID stri
 		return nil, domain.ErrInvalidProductID
 	}
 	return uc.repo.ListByProduct(ctx, productID, locationID)
+}
+
+// ExecuteAll mengambil seluruh daftar promo dengan filter fleksibel dan informasi nama produk & cabang.
+func (uc *ListPriceOverridesUseCase) ExecuteAll(ctx context.Context, q ListAllPriceOverridesQuery) ([]*PriceOverrideDetail, error) {
+	overrides, err := uc.repo.List(ctx, q.ProductID, q.LocationID, q.IsActive)
+	if err != nil {
+		return nil, err
+	}
+
+	prodCache := make(map[string]*domain.Product)
+	locCache := make(map[string]*domain.Location)
+	details := make([]*PriceOverrideDetail, 0, len(overrides))
+
+	for _, po := range overrides {
+		d := &PriceOverrideDetail{Override: po}
+
+		if p, ok := prodCache[po.ProductID]; ok {
+			if p != nil {
+				d.ProductName = p.Name
+				d.ProductSKU = p.SKU
+				d.ProductBrand = p.Brand
+				d.BasePrice = p.SellingPrice
+			}
+		} else {
+			if p, err := uc.productRepo.FindByID(ctx, po.ProductID); err == nil && p != nil {
+				prodCache[po.ProductID] = p
+				d.ProductName = p.Name
+				d.ProductSKU = p.SKU
+				d.ProductBrand = p.Brand
+				d.BasePrice = p.SellingPrice
+			} else {
+				prodCache[po.ProductID] = nil
+			}
+		}
+
+		if l, ok := locCache[po.LocationID]; ok {
+			if l != nil {
+				d.LocationName = l.Name
+				d.LocationCode = l.Code
+			}
+		} else {
+			if l, err := uc.locationRepo.FindByID(ctx, po.LocationID); err == nil && l != nil {
+				locCache[po.LocationID] = l
+				d.LocationName = l.Name
+				d.LocationCode = l.Code
+			} else {
+				locCache[po.LocationID] = nil
+			}
+		}
+
+		details = append(details, d)
+	}
+
+	return details, nil
 }
 
 // DeactivatePriceOverrideUseCase mematikan promo secara manual sebelum tanggal berakhirnya.

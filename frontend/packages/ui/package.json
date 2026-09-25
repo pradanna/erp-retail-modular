@@ -5,7 +5,10 @@
   "type": "module",
   "svelte": "./index.ts",
   "exports": {
-    ".": "./index.ts",
+    ".": {
+      "svelte": "./index.ts",
+      "default": "./index.ts"
+    },
     "./styles/theme.css": "./styles/theme.css"
   },
   "peerDependencies": {

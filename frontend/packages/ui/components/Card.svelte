@@ -14,11 +14,7 @@
     children: Snippet;
   }
 
-  let {
-    padding = 'md',
-    hover = false,
-    children,
-  }: Props = $props();
+  let { padding = 'md', hover = false, children }: Props = $props();
 
   const paddingClasses: Record<string, string> = {
     none: '',
@@ -29,9 +25,9 @@
 </script>
 
 <div
-  class="rounded-xl border border-neutral-200 bg-white shadow-card
+  class="shadow-card rounded-xl border border-neutral-200 bg-white
     {paddingClasses[padding]}
-    {hover ? 'transition-shadow duration-200 hover:shadow-card-hover' : ''}"
+    {hover ? 'hover:shadow-card-hover transition-shadow duration-200' : ''}"
 >
   {@render children()}
 </div>

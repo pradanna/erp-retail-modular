@@ -2319,7 +2319,3181 @@ Untuk proyek kita yang dibangun secara modular dan bertahap, memisahkan reposito
 
 ---
 
+## 🛡️ 31. Otorisasi Fleksibel: Dari Static RBAC Menuju Dynamic Permissions (PBAC)
+
+- **Pertanyaan Kunci:** *"Bagaimana caranya agar izin akses (boleh atau tidaknya) bisa fleksibel dan tidak kaku di-hardcode di kode?"*
+- **Jawaban Arsitektur:** Beralih dari **Static RBAC (Role-Based)** menjadi **Dynamic PBAC (Permission-Based Access Control)** yang dikendalikan oleh database.
+
+### 31.1 Perbedaan Mendasar: Static RBAC vs Dynamic Permissions (PBAC)
+
+| Aspek | Static RBAC (Kaku di Kode) | Dynamic Permissions / PBAC (Fleksibel) |
+| :--- | :--- | :--- |
+| **Pertanyaan Pintu** | *"Apa nama jabatan/role Anda?"* (`is admin?`) | *"Apakah Anda memegang kunci izin ini?"* (`has permission 'inventory.products.create'?`) |
+| **Pengecekan di Router** | `RequireRoles("owner", "admin")` | `RequirePermission("inventory.products.create")` |
+| **Di Mana Aturan Disimpan?** | Tertulis mati di kode Go (`module.go`). | Disimpan di tabel database (`roles`, `permissions`, `role_permissions`). |
+| **Jika Toko Mau Mengubah Izin?** | Programmer harus mengubah kode Go, compile ulang binary `.exe`, lalu restart server. | Owner/Superadmin cukup buka menu **"Pengaturan Hak Akses"** di Backoffice dan mencentang checkbox (berubah instan tanpa sentuh kode!). |
+
+---
+
+### 31.2 Tiga Komponen Arsitektur Otorisasi Fleksibel
+
+#### 1. Format Penamaan Izin Standar (*Permission Strings*)
+Izin dinamai dengan format hierarki: `<modul>.<sumber_daya>.<aksi>`
+- `inventory.products.read` (Boleh melihat daftar produk)
+- `inventory.products.create` (Boleh menambah produk baru)
+- `inventory.products.delete` (Boleh menghapus produk)
+- `inventory.stocks.adjust` (Boleh menyesuaikan stok fisik)
+- `inventory.transfers.approve` (Boleh menyetujui mutasi cabang)
+
+#### 2. Skema Database Otorisasi Dinamis (`shared_*`)
+- **`shared_roles`**: Daftar nama peran (`owner`, `admin`, `cashier`, `warehouse`, atau peran baru seperti `supervisor_toko`).
+- **`shared_permissions`**: Daftar seluruh kemampuan yang tersedia di sistem ERP.
+- **`shared_role_permissions`**: Tabel persimpangan (*Many-to-Many*) yang memetakan role mana memegang izin apa.
+
+#### 3. Middleware `RequirePermission` di Backend Go
+Endpoint di router tidak lagi peduli apakah yang datang adalah Owner, Admin, atau Kasir. Endpoint hanya bertanya: *"Apakah akun ini membawa izin `inventory.transfers.approve`?"*
+```go
+mux.Handle("POST /api/v1/inventory/transfers/{id}/approve",
+    authMiddleware(
+        auth.RequirePermission("inventory.transfers.approve")(
+            http.HandlerFunc(m.stockTransferHandler.Approve),
+        ),
+    ),
+)
+```
+
+---
+
+### 31.3 Analogi Dunia Nyata: "Plang Nama Jabatan Kaku vs Kartu Akses RFID Fleksibel"
+
+- **Static RBAC (Plang Jabatan Kaku):**
+  Pintu ruang brankas dipasangi plang besi las bertuliskan: *"Hanya Mayor yang Boleh Masuk"*. Jika suatu hari seorang Kapten ditunjuk resmi menggantikan tugas Mayor, pintu tetap menolak sampai tukang las datang membongkar plang pintu dan mengelas tulisan baru (programmer mengedit kode Go dan deploy ulang).
+- **Dynamic PBAC (Kartu Akses RFID Fleksibel):**
+  Pintu ruang brankas hanya dipasangi sensor pembaca kartu RFID bertuliskan: *"Hanya kartu dengan Izin Kunci-B yang bisa membuka"*.
+  Pemilik toko (Owner) cukup duduk di depan komputer manajemen lobi, membuka akun Kapten, lalu mencentang kotak "Izin Kunci-B". Dalam 1 detik, kartu Kapten langsung bisa membuka pintu tanpa perlu merusak pintu gedung!
+
+---
+
+## ⚡ 32. Arsitektur Implementasi PBAC Berkinerja Tinggi: In-Memory Cache (RAM) & Sinkronisasi Seketika
+
+### 32.1 Tantangan Performa: Mengapa Otorisasi Tidak Boleh Selalu Query SQL ke Database?
+
+Bayangkan jika setiap kali ada pengguna yang membuka halaman, men-scan barcode kasir, atau melihat daftar stok, server Go harus mengeksekusi query SQL:
+```sql
+SELECT p.name FROM shared_permissions p
+JOIN shared_role_permissions rp ON p.id = rp.permission_id
+JOIN shared_roles r ON rp.role_id = r.id
+WHERE r.name = ?;
+```
+- **Bahaya Skalabilitas:**
+  - Jika kasir menembak 50 barcode per menit, atau ada 1.000 request bersamaan dari kasir-kasir cabang lain, database MySQL akan terbebani oleh ribuan query JOIN yang sama secara berulang-ulang (*Read Bottleneck*).
+  - Ini akan membuat sistem kasir terasa lambat dan delay beberapa milidetik.
+- **Solusi Arsitektur Go: In-Memory Cache O(1) dengan `sync.RWMutex`**
+  - Data hak akses seluruh peran dibaca dari MySQL **hanya sekali saat server startup** (fase *warm-up*).
+  - Hasilnya disimpan langsung di memori RAM server Go dalam struktur data peta bersarang (_nested hash map_):
+    ```go
+    type permissionServiceImpl struct {
+        repo  PermissionRepository
+        mu    sync.RWMutex
+        cache map[string]map[string]bool // key: role_name, key: permission_name -> true
+    }
+    ```
+  - Setiap request HTTP yang masuk dievaluasi dalam waktu **kurang dari 1 mikrodetik** ($O(1)$ RAM lookup) tanpa menyentuh disk database sama sekali!
+
+---
+
+### 32.2 Aturan Bypass Owner & Superadmin (*Immunity Rule*)
+
+Di dalam `permission_service.go`, terdapat aturan sakral:
+```go
+func (s *permissionServiceImpl) HasPermission(role string, permission string) bool {
+    if role == string(UserRoleOwner) || role == string(UserRoleSuperadmin) {
+        return true
+    }
+    // ... lookup cache untuk peran lainnya
+}
+```
+- **Alasan Bisnis:**
+  - Mencegah malapetaka *accidental lockout*: Jika seorang admin secara tidak sengaja menghapus semua checkbox izin milik peran Owner di antarmuka Backoffice, pemilik aplikasi atau pemilik toko tidak akan pernah terkunci dari sistemnya sendiri.
+  - Owner dan Superadmin selalu dijamin memiliki akses 100% mutlak ke seluruh fitur dan modul ERP.
+
+---
+
+### 32.3 Sinkronisasi Seketika Tanpa Restart Server (*Zero-Downtime Cache Invalidation*)
+
+Ketika Owner atau Superadmin mengubah hak akses peran tertentu (misal: mencentang izin `inventory.products.create` untuk kasir) melalui endpoint:
+```http
+PUT /api/v1/roles/cashier/permissions
+```
+
+Alur yang terjadi di balik layar adalah:
+1. **Transaksional Database (`BeginTx`):**
+   MySQL menghapus relasi lama peran tersebut dan menyuntikkan relasi izin baru dalam satu transaksi atomik.
+2. **Reload Cache Seketika (`ReloadCache`):**
+   Segera setelah transaksi MySQL berhasil di-*commit*, service Go membaca ulang daftar perizinan dan memperbarui `cache` di RAM menggunakan `s.mu.Lock()`.
+3. **Hasilnya:**
+   Pada detik itu juga, kasir langsung bisa membuat produk tanpa admin harus merestart backend Go atau menunggu jadwal pembersihan cache (*Zero Latency Update*).
+
+---
+
+### 32.4 Analogi Dunia Nyata: "Satpam Mengantongi Buku Saku vs Bolak-Balik Menelepon Kantor Arsip Pusat"
+
+- **Query Database Setiap Request:**
+  Setiap kali ada tamu mengetuk pintu gerbang kantor, satpam berlari ke gedung kantor arsip pusat di lantai 5, membongkar lemari berkas tebal, mencari nama tamu, lalu kembali ke gerbang untuk membukakan pintu. Antrean tamu di gerbang menjadi sangat panjang dan macet!
+- **In-Memory Cache (PBAC Go Kita):**
+  Sebelum gerbang dibuka di pagi hari, satpam menyalin seluruh daftar tamu ke dalam **buku saku kecil** di kantong seragamnya (RAM).
+  Setiap kali tamu datang, satpam cukup melirik buku sakunya dalam 0,1 detik dan langsung mempersilakan masuk. Jika ada penambahan tamu baru di siang hari, kantor pusat cukup mengirimkan memo revisi agar satpam memperbarui catatan di buku sakunya seketika.
+
+---
+
+## 🧭 33. Arsitektur Layout Bersarang SvelteKit: Root Layout vs Route Group Shell `(app)/+layout.svelte`
+
+### 33.1 Hierarki Dua Lapis Layout di SvelteKit
+
+Dalam membangun aplikasi Backoffice modern, antarmuka dibagi menjadi dua lapisan pembungkus (*Nested Layouts*):
+
+```text
+src/routes/
+├── +layout.svelte          <-- Lapisan 1: Root Layout (Inisialisasi Tema & Auth)
+├── layout.css
+├── login/
+│   └── +page.svelte        <-- Halaman Login (Bebas dari Sidebar)
+└── (app)/
+    ├── +layout.svelte      <-- Lapisan 2: Backoffice Shell (Sidebar + Topbar + Main Content)
+    ├── +layout.ts          <-- Route Guard (Cek auth & role staf)
+    ├── dashboard/
+    └── inventory/
+```
+
+1. **Root Layout (`routes/+layout.svelte`):**
+   - Mengimpor `@erp/ui/styles/theme.css` satu kali untuk seluruh aplikasi.
+   - Menjalankan `initAuth()` saat browser pertama kali dibuka untuk memverifikasi token JWT dari `localStorage`.
+   - Menampilkan *loading spinner* global jika sesi autentikasi sedang diperiksa.
+2. **Route Group Layout (`routes/(app)/+layout.svelte`):**
+   - Menjadi **kerangka operasional (Backoffice Shell)** bagi seluruh halaman internal staf.
+   - Menyatukan komponen [Sidebar.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/lib/components/Sidebar.svelte) di sisi kiri, [Topbar.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/lib/components/Topbar.svelte) di sisi atas, dan area konten utama yang dapat di-*scroll* secara independen.
+
+---
+
+### 33.2 Mengapa Menggunakan Route Group `(app)`?
+
+- **Pemisahan Tampilan Tanpa Merusak URL:**
+  - Halaman login (`/login`) tidak boleh memiliki sidebar atau header navigasi.
+  - Halaman operasional (`/dashboard`, `/inventory/products`) wajib memiliki sidebar dan header navigasi.
+  - SvelteKit menyediakan fitur **Route Group** menggunakan tanda kurung: `(app)`.
+  - Tanda kurung memberitahu SvelteKit: *"Gunakan layout shell ini untuk semua folder di dalamnya, tetapi **JANGAN** sertakan kata `(app)` di URL browser!"*.
+  - Sehingga kasir tetap mengakses `http://localhost:5173/dashboard`, bukan `/app/dashboard`.
+
+---
+
+### 33.3 Svelte 5 Runes dalam Komponen Navigasi
+
+Pada [Sidebar.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/lib/components/Sidebar.svelte) dan [Topbar.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/lib/components/Topbar.svelte), kita memanfaatkan fitur modern Svelte 5:
+1. **`$props()`:**
+   Mendeklarasikan properti komponen (`collapsed`, `mobileOpen`, `onToggleCollapse`, `onCloseMobile`) dengan dukungan type-safety TypeScript penuh tanpa `export let`.
+2. **`$state()`:**
+   Menyimpan status reaktif lokal apakah sidebar sedang diciutkan (*collapsed*) atau sedang dibuka di perangkat mobile.
+3. **`$derived()`:**
+   Menghitung secara otomatis nama modul dan judul halaman berdasarkan URL yang aktif saat ini (`page.url.pathname`). Begitu kasir berpindah halaman, teks breadcrumb di Topbar langsung berubah otomatis tanpa perlu menulis event listener manual!
+
+---
+
+### 33.4 Analogi Dunia Nyata: "Gerbang Kompleks vs Gedung Kantor Karyawan"
+
+- **Root Layout (`+layout.svelte`):**
+  Seperti **Pintu Gerbang Kompleks Perusahaan**. Siapapun yang datang (tamu biasa, kurir, atau karyawan) harus melewati gerbang ini dulu untuk dicek KTP-nya. Tamu diarahkan ke Gedung Lobi Umum (`/login`).
+- **Route Group Layout `(app)`:**
+  Seperti **Gedung Khusus Karyawan**. Begitu karyawan lolos dari gerbang depan dan masuk ke gedung ini, mereka langsung disambut oleh **Lorong Navigasi Bersekat (Sidebar)** dengan papan petunjuk ke Ruang Gudang, Ruang Kasir, dan Ruang Manajer, serta **Meja Informasi Resepsionis (Topbar)** di setiap lantai. Pengunjung dari luar tidak pernah melihat lorong kantor ini karena mereka hanya berada di Gedung Lobi Umum.
+---
+
+## 👤 34. Desain Interaktif Enterprise: Animasi Tooltip, Dropdown Profil & Modal Self-Service
+
+### 34.1 Sidebar Menciut (*Collapsed*) & Animasi Tooltip Geser Kiri-ke-Kanan
+
+- **Tantangan Ruang Kerja Kasir & Admin:**
+  - Pada layar kasir (POS) atau monitor laptop dengan ruang terbatas, sidebar lebar (256px / `w-64`) dapat memakan ruang kerja yang berharga untuk tabel data inventaris.
+  - Mode ciut (*collapsed* `w-18` / 72px) menyisakan ikon saja sehingga area kerja bertambah luas.
+- **Tantangan UX saat Menciut:**
+  - Pengguna mungkin lupa arti sebuah ikon jika tidak ada teksnya.
+- **Solusi Animasi Tooltip CSS-First:**
+  - Pada pembungkus menu, kita pasang class `group relative`.
+  - Tooltip ditempatkan di posisi absolut di sebelah kanan ikon: `absolute left-full top-1/2 -translate-y-1/2`.
+  - Keadaan diam: `opacity-0 -translate-x-2.5` (sembunyi dan sedikit bergeser ke kiri).
+  - Keadaan saat kursor mendekat (*hover*): `group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200 ease-out`.
+  - Hasilnya: Tooltip muncul secara halus meluncur dari kiri ke kanan memberikan sensasi visual yang mulus (*responsive & alive*) tanpa perlu JavaScript tambahan!
+
+---
+
+### 34.2 Dropdown Profil di Topbar & Pola *Click-Outside Backdrop*
+
+- **Kebutuhan Akses Cepat:**
+  - Staf yang sedang bertugas butuh akses instan untuk melihat detail identitas akun, mengganti kata sandi secara mandiri, dan mengakhiri sesi (*logout*).
+- **Arsitektur Dropdown Popover:**
+  - Diletakkan di pojok kanan atas Topbar, menampilkan inisial avatar pengguna, nama panggilan, dan peran (*role*).
+  - Saat tombol diklik, state reaktif Svelte 5 `$state(false)` diubah menjadi `true`.
+- **Pola Penutup Otomatis (*Click-Outside Backdrop*):**
+  - Untuk menutup dropdown saat staf mengklik area lain di layar, kita merender elemen lapisan transparan berukuran layar penuh (*full-screen backdrop*):
+    ```svelte
+    {#if dropdownOpen}
+      <div
+        class="fixed inset-0 z-30"
+        onclick={() => (dropdownOpen = false)}
+        onkeydown={(e) => e.key === 'Escape' && (dropdownOpen = false)}
+        role="button"
+        tabindex="0"
+        aria-label="Tutup menu profil"
+      ></div>
+    {/if}
+    ```
+  - Ini adalah pola yang sangat ringan, andal, dan ramah aksesibilitas (*keyboard escape supported*).
+
+---
+
+### 34.3 Dialog Modal Mandiri (*Self-Service Modals*)
+
+Kita melengkapi Backoffice dengan dua modal dialog interaktif:
+
+1. **Modal Lihat Akun:**
+   - Menampilkan kartu identitas lengkap staf: Nama Lengkap, Username, Email, Peran (*Role Label*), Penempatan Lokasi Cabang, Status Keaktifan, serta ID Pengguna dalam format UUIDv7 berhuruf *monospace*.
+2. **Modal Ganti Kata Sandi:**
+   - Menyediakan form penggantian password dengan validasi langsung di browser (minimal 6 karakter dan pencocokan konfirmasi sandi baru).
+   - Memanggil fungsi type-safe `changePassword` dari `@erp/api-client` yang terhubung langsung ke backend Go `POST /api/v1/auth/change-password`.
+   - Menggunakan komponen form berstandar tinggi: `Input` dengan fitur *show/hide password toggle*, `Alert` untuk pesan umpan balik sukses/gagal, dan `Button` dengan *loading spinner* otomatis saat request sedang berlangsung.
+
+---
+
+### 34.4 Analogi Dunia Nyata: "Kartu Akses Kalung & Ruang Loker Pribadi"
+
+- **Ikon Avatar di Pojok Kanan Atas:**
+  Seperti **Kartu Pengenal Kalung (ID Card)** yang tergantung di leher staf. Siapapun yang melihat sekilas tahu nama dan jabatannya (*Kasir / Gudang / Super Admin*).
+- **Dropdown Menu:**
+  Seperti **Membuka Dompet Kartu Nama**. Dari situ staf bisa memilih mau memperlihatkan KTP aslinya (*Lihat Akun*), mengambil kunci gembok baru (*Ganti Password*), atau mengembalikan kartu tanda masuk ke pos satpam (*Keluar Sesi / Logout*).
+- **Modal Dialog Popup:**
+  Seperti **Bilik Loker Pribadi**. Ketika staf membuka lokernya untuk mengganti kunci gembok sandi rahasia, ruangan sekelilingnya sedikit diredupkan (*backdrop blur*), sehingga staf bisa berkonsentrasi penuh pada urusan keamanan pribadinya tanpa terdistraksi oleh kesibukan di lorong kantor.
+
+---
+
+### 34.5 Navigasi Accordion Collapsible per Kelompok Modul
+
+- **Tantangan Skalabilitas Menu di ERP Enterprise:**
+  - Seiring modul-modul bisnis di-unlock (Inventaris, Pembelian, Penjualan, Keuangan, Komisi, Ecommerce), jumlah tautan menu bisa mencapai 30–50 halaman.
+  - Jika seluruh menu dibiarkan memanjang terbuka secara statis, staf harus sering melakukan *scroll* panjang ke bawah, yang menurunkan efisiensi kerja kasir dan admin (*UX fatigue*).
+- **Solusi Accordion Collapsible Berbasis Svelte 5:**
+  - Header setiap kelompok navigasi (`navGroups`) diubah menjadi tombol pemicu interaktif.
+  - State pelipatan disimpan secara reaktif: `let collapsedGroups = $state<Record<string, boolean>>({});`.
+  - Animasi pembukaan/penutupan menggunakan transisi mulus `transition:slide={{ duration: 150 }}` dari `svelte/transition`.
+  - **Smart Context Awareness:** Jika sebuah kelompok menu ditutup oleh pengguna tetapi ada halaman aktif di dalamnya, judul kelompok otomatis menampilkan indikator titik biru kecil (`bg-primary-600`) sehingga staf tidak pernah kehilangan konteks halaman yang sedang dikerjakannya!
+- **Analogi Dunia Nyata: "Buku Binder / Map Arsip Bersekat"**
+  - Bayangkan meja kerja kasir yang memiliki **Buku Binder Tebal Bersekat**. Ada sekat bertuliskan *"Inventaris"*, *"Keuangan"*, dan *"Pengaturan"*.
+  - Kasir cukup membuka sekat yang sedang diperlukan (misal: lembar *Katalog Produk* dan *Stok*). Sekat modul lain yang belum dipakai dibiarkan tertutup rapi agar meja kerja tidak berantakan tertutup kertas.
+
+---
+
+## 📦 35. Master Data Fondasi Inventaris: Kategori Hierarkis & Lokasi Multi-Cabang
+
+### 35.1 Mengapa Kategori & Lokasi Harus Dibangun Paling Awal? (*Dependency Layering*)
+
+- **Prinsip Ketergantungan Data (Dependency Graph):**
+  - Anda tidak bisa membuat **Katalog Produk** tanpa memilih **Kategori**.
+  - Anda tidak bisa mencatat **Stok Fisik** atau **Nomor Seri** tanpa mengetahui barang tersebut berada di **Lokasi / Cabang** mana.
+  - Anda tidak bisa mengajukan **Mutasi Stok (*Stock Transfer*)** tanpa menentukan **Cabang Asal** dan **Cabang Tujuan**.
+- Oleh karena itu, dalam arsitektur Domain-Driven Design (DDD), **Kategori** dan **Lokasi Cabang** adalah *Root Foundation Master Data* yang wajib tersedia terlebih dahulu sebelum produk, stok, maupun transaksi dapat berjalan.
+
+---
+
+### 35.2 *Component-First Architecture* di Frontend: Paket `@erp/ui`
+
+Sesuai aturan arsitektur monorepo, kita tidak menulis tag HTML mentah berulang kali di halaman, melainkan membangun pustaka komponen reusable berstandar enterprise:
+1. **`Table.svelte`:** Wrapper tabel responsif dengan scroll horizontal otomatis, *skeleton loading spinner*, dan *empty state* ramah pengguna ketika data kosong.
+2. **`Select.svelte`:** Dropdown form serasi dengan `Input.svelte` (tinggi `h-12`, sudut `rounded-xl`, dan warna fokus `@theme`).
+3. **`SearchInput.svelte`:** Input pencarian cepat dengan *debouncing* (jeda 200–300 milidetik) agar tidak membebani server backend di setiap ketikan huruf.
+4. **`Pagination.svelte`:** Kontrol navigasi nomor halaman cerdas dengan elipsis (`...`) untuk volume data besar.
+5. **`StepUpModal.svelte`:** Modal konfirmasi ulang kata sandi (*re-auth*) untuk aksi sensitif di backoffice.
+
+---
+
+### 35.3 Menghindari *Cyclic / Circular Parent* pada Kategori
+
+- Saat membuat atau mengedit kategori, kategori turunan (*sub-kategori*) dapat memilih kategori induk (*parent_id*).
+- **Aturan Logika UI Cerdas:**
+  Saat pengguna mengedit kategori "Elektronik", opsi dropdown *Parent* secara otomatis memfilter dirinya sendiri agar tidak muncul.
+  Kategori "Elektronik" tidak boleh memilih dirinya sendiri sebagai induknya (mencegah *infinite circular loop* $A \to A$ di database).
+
+---
+
+### 35.4 Lokasi Cabang: Toko Fisik vs Gudang Online Storefront
+
+- Sistem ERP retail kita mendukung operasional *Omnichannel* (penjualan kasir offline di cabang fisik dan penjualan online di storefront e-commerce).
+- Di tabel database `inv_locations`, keduanya disimpan sebagai entitas `Location` yang sama namun dibedakan oleh kolom `type`:
+  - `physical`: Toko cabang fisik (memiliki mesin kasir POS, rak etalase, dan staf toko).
+  - `online`: Gudang pengiriman e-commerce (fokus pada packing pesanan kurir).
+- Staf kasir atau gudang dapat di-assign ke lokasi tertentu via `user.location_id` untuk isolasi operasional harian.
+
+---
+
+### 35.5 Analogi Dunia Nyata: "Rak Etalase Bertingkat & Denah Cabang Toko"
+
+- **Kategori Produk:**
+  Seperti **Papan Petunjuk Lorong Supermarket**. Di langit-langit toko tergantung plang besar: *"Elektronik"* (Kategori Utama). Di bawahnya terdapat lorong lebih spesifik: *"Televisi"*, *"Kulkas"*, dan *"Mesin Cuci"* (Sub-kategori). Pembeli dan kasir dapat menemukan barang dengan cepat tanpa tersesat.
+- **Lokasi Cabang:**
+  Seperti **Buku Alamat Cabang Perusahaan**. Toko Anda memiliki Cabang Jakarta Pusat, Cabang Bandung, dan satu Gudang Pusat Ekspedisi Online. Setiap kali barang masuk dari pabrik atau dipindahkan antar toko, kasir mencatat kode cabangnya agar bos tahu persis di brankas toko mana modal barangnya sedang disimpan.
+
+---
+
+## 🏛️ 36. Pemisahan Domain Acuan: Data Master vs Inventaris & Stok
+
+### 36.1 Mengapa "Data Master" dan "Inventaris" Harus Dipisahkan?
+
+Dalam sistem ERP kelas enterprise (seperti SAP, Odoo, Accurate, maupun Gen-E Retail), terdapat perbedaan mendasar antara **Data Master (Master Data)** dan **Data Transaksional/Operasional (Transactional / Inventory Movements)**:
+
+| Aspek Pembeda | Data Master (`/master/...`) | Inventaris & Stok (`/inventory/...`) |
+| :--- | :--- | :--- |
+| **Sifat Data** | Acuan statis, berumur panjang, dan jarang berubah drastis (*Slow-changing dimension*). | Dinamis, bergerak sangat cepat, bertambah seiring transaksi setiap menit (*High-frequency transactions*). |
+| **Contoh Entitas** | Katalog Produk, Kategori Produk, Cabang & Lokasi, Barcode, Kebijakan Garansi. | Jumlah Stok Fisik Cabang, Mutasi Antar Gudang (*Stock Transfer*), Pelacakan Unit Fisik Ber-IMEI, Diskon/Promo Cabang. |
+| **Aktor Pengelola** | Manajer Produk, Purchasing Buyer, atau Owner/Direksi Toko. | Admin Gudang, Staf Kasir POS, dan Supervisor Toko Harian. |
+| **Pertanyaan Kunci** | *"Barang apa yang toko kita jual dan bagaimana spesifikasinya?"* | *"Berapa banyak kotak barang yang ada di rak toko cabang X detik ini?"* |
+
+Jika keduanya dicampur aduk dalam satu menu atau folder, antarmuka Backoffice menjadi semrawut. Kasir yang hanya ingin mengecek stok cabang akan bingung jika harus melewati form konfigurasi garansi pabrik atau master kategori.
+
+---
+
+### 36.2 Struktur Rute SvelteKit & Seamless Idempotent Redirection
+
+Untuk menjaga arsitektur tetap bersih dan intuitif:
+1. **Rute Data Master (`/master/...`):**
+   - `/master/categories`: Pengelolaan taksonomi hierarki kategori.
+   - `/master/products`: Katalog acuan barang (SKU, nama, merek, harga pokok HPP, harga jual, flag serial tracking).
+   - `/master/locations`: Pengaturan identitas cabang fisik dan gudang online.
+   - `/master/barcodes`: Manajemen nomor kode batang (EAN-13, Code-128) dan simulator laser scanner kasir.
+   - `/master/warranties`: Master template garansi toko dan garansi resmi pabrik.
+2. **Rute Inventaris & Stok (`/inventory/...`):**
+   - `/inventory/stocks`: Matriks sisa kuantitas barang per gudang dan penyesuaian opname (*stock adjustment*).
+   - `/inventory/transfers`: Mutasi stok antar cabang (*approval workflow*: Draft $\to$ In Transit $\to$ Received).
+   - `/inventory/serials`: Pelacakan nomor seri / IMEI spesifik per unit fisik yang ada di toko.
+   - `/inventory/price-overrides`: Promo dan diskon khusus cabang tertentu.
+3. **Mekanisme Redirect Idempoten (SvelteKit 2):**
+   Jika staf memiliki *bookmark* lama ke `/inventory/categories` atau `/inventory/locations`, file `+page.ts` secara otomatis melempar `redirect(308, '/master/categories')` sehingga URL langsung berpindah mulus tanpa memicu error 404.
+
+---
+
+### 36.3 Analogi Dunia Nyata: "Buku Katalog Perpustakaan vs Kartu Peminjaman Buku Fisik"
+
+- **Data Master itu Seperti "Buku Induk Katalog Perpustakaan":**
+  - Berisi daftar judul buku, nama pengarang, penerbit, nomor ISBN, dan sinopsis.
+  - Buku induk ini memberitahu pengunjung: *"Perpustakaan ini menerbitkan atau memiliki koleksi buku novel Harry Potter jilid 1 dengan ISBN sekian"*. Data ini tidak berubah meskipun ada pengunjung yang meminjam buku.
+- **Inventaris & Stok itu Seperti "Kartu Peminjaman & Rak Fisik":**
+  - Berisi catatan fisik: *"Di Rak Nomor 3 Cabang Surabaya, saat ini ada 5 eksemplar fisik buku Harry Potter yang tersedia, 2 eksemplar sedang dipinjam siswa, dan 1 eksemplar rusak di sampulnya"*.
+  - Ketika seorang siswa meminjam buku, angka di kartu fisik berkurang dari 5 menjadi 4. Namun, catatan di Buku Induk Katalog tidak pernah berubah!
+
+---
+
+## 🎓 37. Bedah Arsitektur End-to-End: Perjalanan Fitur CRUD Kategori Produk (Dari Database Hingga Svelte 5)
+
+Fitur **Kategori Produk** adalah contoh paling ideal, murni, dan representatif untuk memahami bagaimana arsitektur **Domain-Driven Design (DDD) Modular Monolith** di backend Go dipadukan secara harmonis dengan **SvelteKit 5 Monorepo** di frontend.
+
+Mari kita bedah lapis demi lapis (*layer by layer*), memahami **mengapa file diletakkan di sana** (*Why & Where*), dan bagaimana data mengalir dari klik tombol staf di browser hingga ke baris tabel basis data MySQL.
+
+---
+
+### 37.1 Peta Alur Perjalanan Data (*The End-to-End Data Journey*)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin as Staf Backoffice
+    participant UI as SvelteKit (+page.svelte)
+    participant Client as @erp/api-client
+    participant MW as PBAC Middleware
+    participant Handler as HTTP Handler (interfaces)
+    participant UC as CreateCategoryUseCase (application)
+    participant Domain as Category Entity (domain)
+    participant Repo as mysqlCategoryRepository (infrastructure)
+    participant DB as MySQL (inv_categories)
+
+    Admin->>UI: Klik "Simpan Kategori" (Nama: "Kulkas", Parent: "Elektronik")
+    UI->>Client: createCategory(token, payload)
+    Client->>MW: HTTP POST /api/v1/inventory/categories (Bearer JWT)
+    MW->>MW: Evaluasi PBAC: Role punya 'inventory.categories.create'?
+    MW->>Handler: Forward Request
+    Handler->>Handler: Decode JSON Body -> CreateCategoryCommand
+    Handler->>UC: uc.Execute(ctx, cmd)
+    UC->>Repo: repo.FindByID(cmd.ParentID) (Validasi Induk Ada)
+    Repo->>DB: SELECT * FROM inv_categories WHERE id = ?
+    DB-->>Repo: Return Parent Row
+    UC->>Domain: NewCategory(uuidv7, name, parentID, imageURL)
+    Domain->>Domain: Validasi Invariant: nama != "", parent != self
+    Domain-->>UC: Return *Category Entity
+    UC->>Repo: repo.Save(ctx, category)
+    Repo->>DB: INSERT INTO inv_categories (id, name, parent_id, ...) VALUES (...)
+    DB-->>Repo: Query OK
+    Repo-->>UC: Nil Error
+    UC-->>Handler: Return categoryID
+    Handler-->>Client: HTTP 201 Created {"id": "...", "message": "..."}
+    Client-->>UI: Promise Resolved
+    UI->>UI: Tampilkan Alert Sukses & Muat Ulang Daftar Tabel
+```
+
+---
+
+### 37.2 Bedah 8 Lapis Arsitektur (Why, Where & How)
+
+#### Lapis 1: Skema Database (`migrations/inventory/001_create_inventory_tables.sql`)
+- **Letak:** Folder migrasi khusus modul `inventory`.
+- **Tabel:** `inv_categories` (selalu menggunakan prefix modul `inv_` untuk mencegah konflik nama tabel).
+- **Karakteristik Kunci:**
+  - `id VARCHAR(36) PRIMARY KEY`: Menggunakan **UUIDv7** (urut waktu alami, bukan auto-increment).
+  - `parent_id VARCHAR(36) NULL`: Relasi hierarki pohon (*self-referencing*).
+  - Tidak ada FK ke tabel modul lain (misal: modul sales atau finance).
+
+#### Lapis 2: Domain Layer (`internal/modules/inventory/domain/category.go`)
+- **Tanggung Jawab:** Menyimpan kebenaran murni bisnis (*pure business invariants*), bebas dari teknologi database/HTTP apapun.
+- **Mengapa di `domain`?** Karena aturan bahwa *"nama kategori tidak boleh kosong"* dan *"kategori tidak boleh menjadi induk dari dirinya sendiri ($A \to A$)"* adalah hukum mutlak bisnis, bukan urusan SQL ataupun HTTP.
+- **Pola Khas Go:**
+  - **Constructor `NewCategory(...)`:** Menjamin entitas tidak pernah dibuat dalam keadaan cacat/invalid (*invalid state impossible*).
+  - **Pointer Receiver `(c *Category)`:** Memodifikasi data struct secara in-place tanpa menduplikasi alokasi memori.
+  - **Interface Kontrak `CategoryRepository`:** Didefinisikan di `domain/repository.go`! Bukan di `infrastructure`. Ini adalah prinsip **Dependency Inversion (DIP)**: layer bisnis yang mendikte apa yang dibutuhkannya, bukan layer database.
+
+#### Lapis 3: Infrastructure Layer (`internal/modules/inventory/infrastructure/category_repository.go`)
+- **Tanggung Jawab:** Kuli teknis database yang mengeksekusi query mentah SQL (`INSERT`, `SELECT`, `UPDATE`, `DELETE`).
+- **Mengapa di `infrastructure`?** Jika besok database diganti dari MySQL ke PostgreSQL atau MongoDB, **hanya file ini yang diubah**. Domain dan Application tidak perlu disentuh sama sekali!
+- **Pola Khas Go:**
+  - **Implicit Interface (*Duck Typing*):** `type mysqlCategoryRepository struct { db *sql.DB }` otomatis dianggap sebagai `domain.CategoryRepository` oleh kompilator Go tanpa perlu menulis kata kunci `implements`.
+
+#### Lapis 4: Application Layer (`internal/modules/inventory/application/category_usecases.go`)
+- **Tanggung Jawab:** Pengatur orkestrasi alur kerja use case.
+- **Alur Kerja `CreateCategoryUseCase.Execute`:**
+  1. Menerima input dalam bentuk **`Command` DTO** (`CreateCategoryCommand`).
+  2. Memeriksa keberadaan induk via `uc.repo.FindByID(cmd.ParentID)`.
+  3. Menghasilkan ID time-ordered UUIDv7 via `uid.New()`.
+  4. Memanggil domain constructor `domain.NewCategory(...)`.
+  5. Memerintahkan repository menyimpan ke database `uc.repo.Save(ctx, category)`.
+- **Mengapa di `application`?** Karena layer ini memegang skenario kerja (*workflow*), namun sama sekali tidak tahu apakah perintah datang dari HTTP REST, gRPC, terminal CLI, atau cron job. Dilarang keras mengimpor `net/http` di layer ini!
+
+#### Lapis 5: Interfaces / HTTP Layer (`internal/modules/inventory/interfaces/category_handler.go`)
+- **Tanggung Jawab:** Duta penerjemah protokol jaringan HTTP.
+- **Tugas Utama:**
+  1. Menerima request HTTP, membaca token autentikasi.
+  2. Melakukan *decoding* JSON dari `r.Body` ke DTO struct `CreateCategoryRequest`.
+  3. Memanggil use case `h.createCategory.Execute(ctx, cmd)`.
+  4. Menulis balasan status HTTP (`201 Created`, `400 Bad Request`, `404 Not Found`) dalam format JSON.
+
+#### Lapis 6: Modular Wiring & Lisensi (`internal/modules/inventory/module.go` & `main.go`)
+- **Tanggung Jawab:** Perakitan dependensi (*Dependency Injection*) dan perlindungan hak lisensi modul.
+- **Dependency Injection:**
+  ```go
+  // Dirakit dari bawah ke atas:
+  categoryRepo := infrastructure.NewCategoryRepository(db)
+  createCategoryUC := application.NewCreateCategoryUseCase(categoryRepo)
+  categoryHandler := inventoryHTTP.NewCategoryHandler(createCategoryUC, ...)
+  ```
+- **Proteksi Lisensi & Otorisasi:**
+  Di `module.Register()`, rute didaftarkan dengan middleware granular PBAC:
+  `mux.Handle("POST /api/v1/inventory/categories", require("inventory.categories.create", m.categoryHandler.Create))`
+  Jika lisensi toko untuk modul Inventory tidak aktif di `main.go`, fungsi `Register()` ini **tidak akan pernah dipanggil**. Modul benar-benar tidak ter-mount di RAM!
+
+#### Lapis 7: Frontend Types & API Client (`packages/types` & `packages/api-client`)
+- **Tanggung Jawab:** *Single Source of Truth* kontrak data antara backend dan frontend.
+- **`@erp/types`:** Mendefinisikan interface TypeScript `CategoryResponse`, `CreateCategoryRequest`, `UpdateCategoryRequest` tanpa duplikasi tipe.
+- **`@erp/api-client`:** Membungkus HTTP fetch menjadi fungsi async yang type-safe:
+  `const data = await listCategories(token);`
+
+#### Lapis 8: Antarmuka UI SvelteKit 5 (`routes/(app)/master/categories/+page.svelte`)
+- **Tanggung Jawab:** Pengalaman pengguna interaktif (*reactive backoffice UI*).
+- **Fitur Modern Svelte 5 Runes:**
+  - `$state`: Menyimpan daftar kategori, status loading, dan nilai form modal secara reaktif.
+  - `$derived`: Menghitung total kategori utama, sub-kategori, dan memetakan opsi dropdown secara otomatis tanpa perlu reactive statement `$:` gaya lama.
+  - **Pencegahan Circular Loop di UI:** Saat tombol edit diklik, opsi pilihan Parent secara otomatis menyaring ID kategori yang sedang diedit agar kategori tidak bisa memilih dirinya sendiri sebagai induk.
+
+---
+
+### 37.3 Analogi Dunia Nyata: "Dapur Restoran Bintang Lima"
+
+Untuk mengingat peran masing-masing layer dengan mudah, bayangkan alur **Dapur Restoran Bintang Lima**:
+
+| Komponen Teknis | Analogi Restoran | Peran & Tugas di Restoran |
+| :--- | :--- | :--- |
+| **MySQL Database** | **Gudang Pendingin Bahan** | Tempat penyimpanan fisik bahan mentah makanan (daging, sayur, bumbu) di lemari rak. |
+| **Infrastructure (Repository)** | **Staf Logistik Dapur** | Petugas khusus yang tahu persis di rak mana bahan disimpan, dan mengambilnya menggunakan alat fisik (SQL). |
+| **Domain (Entity & Invariant)** | **Buku Resep & Standar Higienitas Chef** | Aturan baku masakan: *"Daging basi dilarang dimasak"*, *"Saus tiram tidak boleh dicampur es krim"*. Aturan ini berlaku mutlak di dapur manapun. |
+| **Application (Use Case)** | **Koki Masak (*Cook*)** | Koki yang mengeksekusi langkah demi langkah: minta staf logistik ambil bahan $\to$ racik sesuai standar higienitas $\to$ tata di piring saji. |
+| **Interfaces (HTTP Handler)** | **Pelayan (*Waiter*)** | Menerima pesanan dari tamu di meja, mencatat nota, membawanya ke dapur, lalu mengantarkan hidangan matang ke tamu. Pelayan tidak perlu tahu cara menyalakan kompor gas! |
+| **module.go (Wiring)** | **Manajer Restoran Saat Briefing Pagi** | Membagikan tugas pagi: menunjuk pelayan A melayani meja 1, menghubungkan koki B dengan staf logistik C. |
+| **Licensing (`main.go`)** | **Izin Buka Stan Makanan di Food Court** | Jika stan kuliner Jepang belum membayar sewa izin di mall, stan tersebut ditutup terpal rapat dan tidak melayani pesanan apapun. |
+| **SvelteKit 5 UI** | **Meja Makan & Buku Menu Tamu** | Tampilan buku menu yang elegan, tempat pelanggan memilih makanan, melihat foto menu, dan menerima nota kasir. |
+
+---
+
+## 🌐 38. Arsitektur Monorepo Frontend: Mengapa `packages/api-client` Terpisah dari `apps/backoffice`?
+
+### 38.1 Pertanyaan Arsitektur Kunci
+> *"Mengapa `inventory.ts` diletakkan di `packages/api-client` dan bukan langsung di dalam `apps/backoffice/src/lib/api/inventory.ts`? Apakah ada rencana agar bisa dipakai oleh `apps/storefront`?"*
+
+Jawabannya adalah: **YA, 100% TEPAT SEKALI!**
+
+Keputusan ini adalah pilar fundamental dari arsitektur **Monorepo (Turborepo / npm workspaces)** yang memisahkan antara **Aplikasi (*Apps*)** dan **Pustaka Bersama (*Packages*)**.
+
+---
+
+### 38.2 Anatomi Monorepo: `apps/` vs `packages/`
+
+Dalam proyek ERP Retail kita, struktur frontend dibagi menjadi dua kubu utama:
+
+```
+frontend/
+├── apps/                        <- Aplikasi yang di-deploy dan dijalankan (Runnable Apps)
+│   ├── backoffice/              <- Single Page Application (SPA) khusus internal kasir/admin
+│   └── storefront/              <- Server-Side Rendering (SSR) khusus toko online e-commerce publik
+│
+└── packages/                    <- Pustaka internal yang dibagikan (Shared Internal Libraries)
+    ├── types/                   <- Single Source of Truth tipe entitas dan DTO backend
+    ├── ui/                      <- Design system, token CSS Tailwind v4, komponen reusable
+    └── api-client/              <- SDK pemanggil REST API backend Go yang type-safe
+```
+
+---
+
+### 38.3 Mengapa `storefront` Membutuhkan `api-client/src/inventory.ts`?
+
+Toko online e-commerce publik (`apps/storefront`) **BUKAN** aplikasi yang berdiri sendiri dengan database berbeda. Storefront menjual **barang fisik yang sama** yang ada di gudang toko ritel!
+
+Storefront membutuhkan fungsi-fungsi di `inventory.ts` untuk:
+1. **Menampilkan Etalase Produk Publik:** Memanggil `listProducts()` dan `listCategories()` untuk katalog toko online dan menu navigasi kategori.
+2. **Halaman Detail Produk (*Product Detail Page*):** Memanggil `getProduct(id)` untuk menampilkan deskripsi, merek, foto, dan varian barang.
+3. **Cek Ketersediaan Stok Real-Time:** Memanggil `getStock(productId, locationId)` (khusus lokasi gudang online) agar pembeli tahu apakah barang masih tersedia sebelum menekan tombol *"Beli Sekarang"*.
+4. **Harga Diskon & Flash Sale:** Memanggil `getEffectivePrice(productId, locationId)` agar pembeli melihat harga promo cabang online yang sedang aktif.
+5. **Informasi Garansi Purna Jual:** Memanggil `getProductWarranties(productId)` untuk menampilkan badge *"Garansi Resmi TAM 1 Tahun"* di halaman produk e-commerce.
+
+---
+
+### 38.4 Bahaya Besar Jika Ditaruh di Dalam `apps/backoffice` (*The Silo Anti-Pattern*)
+
+Jika fungsi pemanggil API ditaruh di dalam `apps/backoffice/src/lib/api/inventory.ts`, maka timbul 3 malapetaka arsitektur:
+
+1. **Pelanggaran Batas Modul (*Boundary Violation*):**
+   `apps/storefront` **TIDAK BISA** dan **DILARANG KERAS** mengimpor kode dari aplikasi tetangganya (`apps/backoffice`). Backoffice adalah aplikasi tertutup (SPA terlindungi login), sedangkan storefront adalah aplikasi publik (SSR SEO-friendly). Keduanya memiliki konfigurasi build, bundler, dan runtime yang berbeda.
+2. **Jebakan *Copy-Paste* (*DRY Violation*):**
+   Developer yang malas akan menyalin (*copy-paste*) kode fetch dari backoffice ke storefront. Akibatnya, ada 2 salinan kode yang melakukan hal yang sama persis.
+3. **Risiko Ketidaksinkronan (*API Drift*):**
+   Jika suatu hari backend Go mengubah URL dari `/api/v1/inventory/products` menjadi `/api/v1/inventory/v2/products` atau menambahkan query parameter baru, developer harus mengingat untuk mengubahnya di dua proyek berbeda. Jika lupa salah satu, storefront akan *crash* atau menampilkan data yang salah.
+
+Dengan meletakkannya di `packages/api-client`:
+- **Cukup ditulis SATU KALI**.
+- Jika ada perubahan endpoint backend, cukup perbarui satu file di `packages/api-client/src/inventory.ts`.
+- Baik `apps/backoffice` maupun `apps/storefront` langsung menikmati pembaruan tersebut secara otomatis dengan jaminan ketat *TypeScript compile-time safety*.
+
+---
+
+### 38.5 Analogi Dunia Nyata: "Instalasi Saluran Pipa Air Bersih PDAM"
+
+Bayangkan sebuah gedung ruko toko retail yang terdiri dari dua ruangan:
+1. **Dapur Karyawan / Ruang Kantor (Backoffice):** Hanya boleh dimasuki oleh kasir, staf gudang, dan bos.
+2. **Area Etalase & Wastafel Depan (Storefront):** Area terbuka yang dikunjungi oleh pelanggan umum dari jalanan.
+
+Pertanyaannya: **Di mana pipa saluran air bersih utama (PDAM) harus dipasang?**
+- ❌ **Jika pipa air dipasang di dalam lemari brankas karyawan (Backoffice):**
+  Maka setiap kali pengunjung umum di depan butuh air untuk cuci tangan, mereka tidak bisa mendapatkan air. Karyawan terpaksa menimba air pakai ember bolak-balik dari dapur ke depan (*copy-paste manual*). Jika keran dapur rusak, wastafel depan ikut kering.
+- ✅ **Pipa air harus dipasang sebagai infrastruktur bersama di dinding gedung (`packages/api-client`):**
+  Pipa air bersih mengalir di dinding tengah gedung.
+  - Ruang kantor karyawan tinggal memasang **keran dapur** yang tersambung ke pipa utama.
+  - Area depan etalase toko tinggal memasang **keran wastafel** yang tersambung ke pipa utama yang sama persis.
+
+Keduanya mendapatkan air bersih dari sumber yang sama, tanpa saling mengganggu, dan tanpa perlu menarik dua saluran pipa ganda dari jalan raya!
+
+---
+
+## 🎭 39. Perbedaan Fundamental View & Controller: Backoffice vs Storefront
+
+### 39.1 Apakah Hampir Seluruh Data Bisa Diakses Dua-duanya?
+Jawabannya: **TIDAK SEMUANYA.** Walaupun entitas barang yang dijual sama persis, terdapat perbedaan batas keamanan (*security & authorization boundaries*) yang mutlak:
+
+| Aspek Data & Kontrol | Backoffice (`apps/backoffice`) | Storefront (`apps/storefront`) |
+| :--- | :--- | :--- |
+| **Harga Pokok / HPP (`purchase_price`)** | ✅ **Boleh Diakses:** Owner/Admin wajib tahu HPP untuk menghitung laba kotor. | ❌ **HARAM Bocor ke Publik:** Pembeli umum tidak boleh tahu harga modal toko! |
+| **Status Publikasi Produk** | ✅ **Semua Status:** Menampilkan `draft`, `active`, dan `archived`. | ❌ **Hanya `active`:** Produk dalam tahap perencanaan atau sudah tidak dijual disembunyikan. |
+| **Isolasi Lokasi Stok** | ✅ **Semua Cabang:** Admin memantau stok fisik di seluruh toko dan gudang. | ❌ **Hanya Gudang Online:** Pembeli hanya melihat stok yang siap dikirim via kurir ekspedisi. |
+| **Aksi Tulis (*Write Actions*)** | ✅ **Penuh (PBAC):** Create, Update, Delete produk, Opname, Mutasi Stok. | ❌ **Read-Only / Shopping:** Publik hanya bisa melihat barang dan membuat pesanan (*Checkout*). |
+| **Pola Rendering (Controller)** | **Client-Side SPA:** Cepat di browser, interaktif, tidak butuh SEO (terlindung login). | **Server-Side Rendering (SSR):** Wajib SEO-friendly agar halaman terindeks sempurna oleh Googlebot & OpenGraph. |
+
+---
+
+## 🔐 40. Pola Route Grouping SvelteKit: Mengapa Ada Folder `(app)` dan `login`?
+
+### 40.1 Mengapa Halaman Login Berada di Dalam `apps/backoffice`?
+- **Pintu Masuk Otentikasi Staf:**
+  Backoffice adalah aplikasi internal operasional toko. Kasir POS, Admin Gudang, Supervisor, dan Owner **wajib memiliki pintu masuk otentikasi** untuk memvalidasi kredensial (username/password) dan menerima token JWT yang berisi peran (*role*) dan hak akses (*permissions*).
+- **Berbeda dari Akun Pelanggan Storefront:**
+  Nanti di `apps/storefront`, akan ada alur login pelanggan e-commerce tersendiri (misal: OTP WhatsApp / Google OAuth) untuk menyimpan alamat pengiriman dan melihat status paket kurir. Akun pelanggan (*role = 'customer'*) **dilarang keras** masuk ke Backoffice!
+
+---
+
+### 40.2 Keajaiban Tanda Kurung SvelteKit: `(app)` vs `login`
+
+Dalam SvelteKit, nama folder yang diapit tanda kurung seperti `(app)` disebut **Route Group (Layout Group)**:
+
+```
+src/routes/
+├── +layout.svelte               <- Root Layout (Inisialisasi Auth Store di RAM)
+│
+├── login/                       <- Di LUAR (app)
+│   └── +page.svelte             <- Tampil FULL-SCREEN (Tanpa Sidebar & Topbar)
+│
+└── (app)/                       <- ROUTE GROUP (Tanda kurung tidak muncul di URL!)
+    ├── +layout.svelte           <- Shell Navigasi: Renders <Sidebar> + <Topbar>
+    ├── +layout.ts               <- ROUTE GUARD: if (!auth) redirect(307, '/login')
+    ├── dashboard/
+    ├── master/
+    └── inventory/
+```
+
+#### 2 Keuntungan Utama Pemisahan `(app)`:
+1. **Layout Bersih Tanpa Polusi Sidebar:**
+   - Folder `(app)` memiliki `(app)/+layout.svelte` yang memuat `<Sidebar>` dan `<Topbar>`. Seluruh halaman di dalamnya (`/dashboard`, `/master/products`, dll.) otomatis dibungkus menu navigasi.
+   - Halaman `/login` berada di luar `(app)`. Hasilnya: halaman login tampil elegan secara **layar penuh (*full-screen split-screen*)** tanpa menu sidebar yang aneh/bocor di layar orang yang belum login!
+2. **Pencegahan *Infinite Redirect Loop*:**
+   - Di `(app)/+layout.ts`, terdapat penjaga pintu (*Route Guard*):
+     ```typescript
+     if (!isAuthenticated()) {
+         redirect(307, '/login');
+     }
+     ```
+   - Jika `/login` diletakkan di dalam `(app)`, maka saat pengguna belum login, sistem akan mengarahkannya ke `/login`, lalu `/login` mengecek lagi apakah sudah login, lalu redirect ke `/login` lagi tanpa henti (*infinite redirect loop* $\to$ browser crash).
+   - Tanda kurung `(app)` tidak menambah prefix di URL browser, jadi URL tetap rapi: `/dashboard`, bukan `/(app)/dashboard`.
+
+---
+
+### 40.3 Analogi Dunia Nyata: "Pintu Mesin Absensi Fingerprint Khusus Karyawan"
+
+- **Halaman `/login` Backoffice = Pintu Belakang Karyawan & Mesin Absensi:**
+  Di belakang gedung toko retail, terdapat pintu khusus bertuliskan *"Staff Only"*. Di sebelahnya ada mesin absensi sidik jari (*Fingerprint / PIN Keypad*). Kasir atau admin gudang wajib menempelkan jari atau memasukkan PIN sebelum pintu terbuka.
+- **Halaman `(app)` = Ruang Kerja Internal Toko:**
+  Setelah sidik jari cocok (login sukses), staf melangkah masuk ke ruangan kerja yang lengkap dengan meja kerja, seragam, papan tugas, dan komputer kasir POS (*Sidebar & Topbar*).
+- **Pengunjung Toko (Storefront):**
+  Pelanggan umum yang datang dari pintu depan sama sekali tidak boleh masuk lewat pintu fingerprint karyawan ini. Jika ada orang luar yang nekat mencoba masuk, sistem penjaga pintu (`(app)/+layout.ts`) langsung mengusir mereka kembali ke luar (*Redirect*).
+
+---
+
+## 🚪 41. Mengapa Tampilan Login Backoffice & Storefront Tetap Harus Terpisah?
+
+### 41.1 Dua Pengguna yang Berbeda 180 Derajat
+
+Meskipun backend Go menggunakan tabel pengguna yang sama (`users`), **antarmuka login untuk Backoffice dan Storefront wajib dipisah secara visual dan alur pengguna (*User Journey*)**:
+
+| Kriteria | Login Backoffice (`apps/backoffice/src/routes/login`) | Login Storefront (`apps/storefront`) |
+| :--- | :--- | :--- |
+| **Target Pengguna** | Karyawan Internal (Kasir, Admin Gudang, Superadmin, Owner). | Pembeli / Konsumen umum di internet. |
+| **Metode Otentikasi** | **Kredensial Formal:** Username & Password kuat, atau PIN Kasir POS. | **Cepat & Tanpa Hambatan (*Frictionless*):** Nomor WhatsApp (OTP), Google OAuth, Apple ID, atau Email Link. |
+| **Format Tampilan** | **Halaman Khusus Enterprise:** Layar penuh (*split-screen*) berlatar gelap, logo resmi Gen-E, informasi sistem internal toko. | **Modal Pop-Up Belanja:** Kotak dialog melayang di atas keranjang belanja (*Cart Modal*) atau halaman checkout yang ramah dan hangat. |
+| **Alur Setelah Sukses** | Diarahkan ke **`/dashboard`** atau halaman kerja operasional toko. | Tetap berada di halaman keranjang belanja untuk menyelesaikan pembayaran (*Checkout*), atau riwayat pesanan (*My Orders*). |
+| **Peran Pengguna (*Role*)** | `owner`, `superadmin`, `admin`, `cashier`, `warehouse`. | Wajib berstatus `customer`. |
+
+---
+
+### 41.2 Bagaimana Backend Go Membedakannya?
+
+1. **Satu Basis Data, Berbeda Hak Akses:**
+   - Keduanya sama-sama diverifikasi oleh package `shared/auth` di backend Go dan menghasilkan token JWT yang valid.
+   - Namun, payload token JWT milik staf memuat hak akses modular:
+     `{"sub": "...", "role": "cashier", "permissions": ["inventory.products.view", ...]}`
+   - Sementara token JWT milik pembeli hanya memuat:
+     `{"sub": "...", "role": "customer", "permissions": ["orders.create", "orders.view_own"]}`
+2. **Pagar Pembatas (*Guard Barrier*):**
+   - Jika seorang pelanggan online mencoba login di portal Backoffice, file `(app)/+layout.ts` memeriksa perannya:
+     ```typescript
+     if (user?.role === 'customer') {
+         redirect(307, '/login?error=forbidden');
+     }
+     ```
+     Sistem langsung menolak dan mengusir akun pembeli agar tidak bisa menyusup ke aplikasi kasir/admin.
+
+---
+
+### 41.3 Analogi Dunia Nyata: "Pintu Masuk Penonton Bioskop vs Pintu Khusus Ruang Proyektor"
+
+Bayangkan sebuah bioskop modern di mall:
+- **Pintu Masuk Penonton (Storefront Login):**
+  Di lobi bioskop yang terang dan ramai, ada meja scan tiket QR barcode dari smartphone. Penonton cukup menempelkan layar HP selama 1 detik, pintu tali beludru dibuka oleh staf ramah, dan penonton langsung masuk ke kursi bioskop untuk menikmati film. Sangat cepat, santai, dan tanpa hambatan.
+- **Pintu Ruang Proyektor & Brankas Tiket (Backoffice Login):**
+  Di lorong belakang bioskop yang tersembunyi, ada pintu baja bertuliskan *"Staff Only"*. Di sebelahnya ada panel digital yang meminta kartu identitas magnetik karyawan dan PIN khusus. Petugas proyektor dan manajer bioskop wajib memasukkan kode rahasia sebelum pintu baja terbuka.
+
+Penonton bioskop tidak mungkin disuruh antre di pintu baja lorong karyawan belakang. Begitu juga petugas teknisi proyektor tidak bisa mengendalikan film lewat meja scan tiket penonton!
+
+---
+
+## 🎨 42. Arsitektur Tema Design System: Mengapa Mengubah Token `@theme` Otomatis Mengubah Seluruh Tombol & Komponen Aplikasi?
+
+### 42.1 Masalah "Hardcode Hex Code" vs Keanggunan Design Tokens
+
+Bayangkan jika sebuah aplikasi ERP memiliki 100 tombol aksi di puluhan halaman, dan setiap tombol ditulis dengan kode hex langsung:
+```svelte
+<!-- ❌ ANTI-PATTERN: Hardcoded Hex Code di Komponen/Halaman -->
+<button class="bg-[#2563eb] text-white hover:bg-[#1d4ed8]">
+    + Tambah Kategori
+</button>
+```
+Jika suatu hari pemilik bisnis memutuskan merombak identitas brand dari **Biru** ke **Monochrome Obsidian / Hitam Mewah (Gen-E Enterprise)**:
+- Tim programmer harus mencari dan mengganti kode `#2563eb` di ratusan baris file satu demi satu.
+- Rawan terlewat, menyebabkan warna tombol belang-belang di berbagai halaman.
+
+### 42.2 Solusi Tailwind CSS v4 Engine-First (`@theme`)
+
+Di dalam file `/packages/ui/styles/theme.css`, kita mendaftarkan token warna semantik brand sebagai **Single Source of Truth**:
+```css
+@theme {
+  /* ── Primary (Gen-E Monochrome Obsidian / Black) ─────────────────── */
+  --color-primary-50:  #f4f4f5;
+  --color-primary-500: #27272a;
+  --color-primary-600: #09090b; /* Aksen Utama Tombol CTA & Menu Aktif */
+  --color-primary-700: #000000;
+}
+```
+
+Dan seluruh komponen UI dasar (seperti `Button.svelte`, `Badge.svelte`, `Sidebar.svelte`) hanya merujuk ke token semantik ini:
+```svelte
+<!-- Button.svelte -->
+const variantClasses = {
+    primary: 'bg-primary-600 text-white hover:bg-primary-500 shadow-sm active:scale-[0.99]',
+};
+```
+
+#### Efek Domino yang Sempurna:
+Hanya dengan mengubah satu baris definisi `--color-primary-600` dari `#2563eb` (biru) menjadi `#09090b` (obsidian/hitam):
+1. **Tombol CTA Utama (`+ Tambah Kategori`):** Otomatis berubah menjadi hitam pekat mewah dengan efek hover abu-abu arang modern (`#27272a`).
+2. **Menu Sidebar Aktif (`Kategori Produk`):** Otomatis menjadi kapsul hitam pekat kontras tinggi dengan teks putih bersih, serasi dengan logo hitam Gen-E.
+3. **Avatar Staf & Badge:** Otomatis menyesuaikan aksen monokromatis elegan tanpa kita perlu menyentuh kode file halaman `+page.svelte` sama sekali!
+
+---
+
+### 42.3 Analogi Dunia Nyata: "Panel Sakelar Utama Pengatur Lampu Induk Gedung Mall"
+
+- **Pendekatan Hardcoded = Mengganti 1.000 Bohlam Lampu Satu per Satu:**
+  Bayangkan pengelola gedung mall ingin mengganti nuansa pencahayaan mall dari lampu neon biru menjadi lampu hangat mewah (*warm amber / dark luxury*). Jika setiap lampu harus dipanjat dengan tangga dan diganti bohlamnya satu demi satu, biayanya mahal dan memakan waktu berminggu-minggu.
+- **Pendekatan Design System Token (`theme.css`) = Panel Kontrol Sakelar Pintar Terpusat:**
+  Gedung modern menggunakan lampu pintar digital (*Smart LED Lighting System*). Di ruang kontrol teknisi (*Chief Engineer Control Room*), cukup geser satu panel sakelar induk: **"Ubah Preset Gedung dari Mode Neon Biru ke Mode Obsidian Luxury"**.
+  Dalam hitungan sepersekian detik, seluruh lampu di lobi utama, koridor kasir, papan petunjuk arah, dan kamar pas toko otomatis serentak berubah warna secara seragam, sempurna, dan tanpa ada satu sudut pun yang tertinggal!
+
+---
+
+## 🏷️ 43. Semantik Warna UI: Memisahkan Warna Brand Utama (Primary Obsidian) dan Status Informasi (Info Blue)
+
+### 43.1 Mengapa Tombol Utama Harus "Primary" Namun Badge Hierarki Boleh "Info Blue"?
+
+Dalam arsitektur *Design System* enterprise modern, warna dibagi menjadi dua kategori fungsional:
+1. **Warna Identitas Brand (*Brand Identity Colors*):**
+   - Menggunakan token `--color-primary-*` (di Gen-E: **Monochrome Obsidian / Hitam Mewah `#09090b`**).
+   - Digunakan untuk elemen penentu aksi utama: **Tombol Tambah/Simpan (CTA)**, menu navigasi aktif, dan avatar identitas resmi. Tujuannya memberikan kesan berwibawa, solid, dan konsisten dengan logo brand.
+2. **Warna Semantik Status (*Semantic Status Colors*):**
+   - Menggunakan token terpisah: `--color-info-*` (Biru), `--color-success-*` (Hijau), `--color-warning-*` (Amber), `--color-danger-*` (Merah).
+   - Digunakan untuk memberikan **petunjuk status instan** kepada mata kasir/admin saat memindai tabel data yang panjang:
+     - **Biru (`info`):** Menandai **Kategori Utama (Induk)**, sehingga langsung kontras dan dapat dibedakan dari Sub-Kategori (abu-abu netral).
+     - **Hijau (`success`):** Menandai stok aman, barang lunas, atau transfer yang telah diterima.
+     - **Merah (`danger`):** Menandai stok habis atau transaksi batal.
+
+### 43.2 Penerapan Kode Bersih (Clean Architecture) di Svelte 5
+
+Dengan menambahkan token `--color-info-*` secara resmi di `theme.css`:
+```svelte
+<!-- Di kolom Tipe / Hierarki (categories/+page.svelte) -->
+<td class="px-4 py-3">
+    {#if category.parent_id}
+        <Badge variant="default" size="sm">Sub-Kategori</Badge>
+    {:else}
+        <!-- Tetap Biru Lembut (bg-info-50 text-info-700 border-info-200) -->
+        <Badge variant="info" size="sm">Kategori Utama</Badge>
+    {/if}
+</td>
+```
+Hasilnya:
+- Tombol aksi `+ Tambah Kategori` tetap tampil hitam obsidian mewah (tidak lagi biru menyala yang bertabrakan dengan brand).
+- Label badge `Kategori Utama` tetap memiliki aksen biru lembut yang segar, informatif, dan mudah dipindai di tabel.
+
+---
+
+### 43.3 Analogi Dunia Nyata: "Papan Petunjuk Bandara Internasional"
+
+Bayangkan interior sebuah bandara internasional berbintang lima:
+- **Logo Resmi & Meja Resepsionis Utama (Primary Brand = Hitam Obsidian):**
+  Papan nama bandara dan meja counter lobi depan dirancang dengan marmer hitam obsidian beraksen emas/perak yang sangat berkelas dan elegan.
+- **Rambu Petunjuk Arah Terminal (Semantic Info = Biru Informasi):**
+  Meskipun logo bandara berwarna hitam mewah, papan petunjuk arah jalan ke *"Terminal Keberangkatan Internasional"* atau *"Informasi Penerbangan"* sengaja menggunakan lampu latar **biru lembut universal**.
+  Tujuannya agar penumpang yang sedang terburu-buru bisa langsung menemukan informasi rute tanpa harus membaca tulisan satu per satu.
+  
+Jika seluruh rambu petunjuk jalan ikut dicat hitam polos seperti logo, mata pengunjung akan kelelahan membedakan mana nama toko dan mana petunjuk arah terminal!
+
+---
+
+## 📦 44. Arsitektur Database Seeder: Menjaga Idempotensi & Mengelola Relasi Hierarkis Antar Data
+
+### 44.1 Mengapa Seeder Tidak Boleh Sekadar `INSERT INTO` Polos?
+
+Seeder adalah program pembuat data awal (*initial dummy/master data*) untuk keperluan demo, pengujian otomatis, maupun instalasi awal toko klien.
+
+Jika seeder ditulis dengan query `INSERT` biasa tanpa pengecekan:
+```sql
+-- ❌ RAWAN CRASH: Error saat dijalankan kedua kalinya
+INSERT INTO inv_products (id, sku, name) VALUES ('...', 'SAM-S24U', 'Samsung S24');
+```
+Begitu seeder dijalankan untuk kedua kalinya saat redeploy atau restart server, database akan langsung melempar error:
+`Error 1062: Duplicate entry 'SAM-S24U' for key 'inv_products.sku'` $\to$ aplikasi gagal deploy!
+
+### 44.2 Prinsip Idempotensi & Pola "Two-Pass" pada Relasi Parent-Child
+
+Dalam implementasi Go pada [seeder.go](file:///c:/PROJECT/WEBSITE/erp-retail-modular/backend/internal/modules/inventory/seeder.go), kita menerapkan dua pola penting:
+
+#### 1. Idempotensi Berbasis Unique Key
+Sebelum melakukan `INSERT`, sistem selalu mengecek apakah entitas dengan kunci bisnis unik tersebut sudah ada:
+- Pada **Lokasi**: Dicek via `SELECT id FROM inv_locations WHERE code = ?`
+- Pada **Produk**: Dicek via `SELECT id FROM inv_products WHERE sku = ?`
+- Pada **Kategori**: Dicek via `SELECT id FROM inv_categories WHERE name = ?`
+Jika data sudah ada di database, baris tersebut dilewati (*skip*). Jika belum, barulah di-*insert*. Dengan demikian seeder aman dieksekusi 100 kali berturut-turut tanpa memicu duplikasi atau error.
+
+#### 2. Pola "Two-Pass" untuk Struktur Hierarkis Kategori
+Sub-kategori membutuhkan `parent_id` yang valid dan menunjuk ke Kategori Induk:
+1. **Pass 1 (Kategori Utama):** Kategori dengan `Parent == ""` di-*insert* terlebih dahulu menggunakan UUIDv7 baru. ID yang terbentuk disimpan ke dalam cache memori `categoryIDMap[name] = id`.
+2. **Pass 2 (Sub-Kategori):** Sub-kategori dieksekusi setelahnya. Sistem mengambil `parentID` dari `categoryIDMap` dan memasukkannya ke kolom `parent_id`.
+
+```mermaid
+flowchart TD
+    A[Mulai Seeding Kategori] --> B[Ambil Kategori Induk: Parent == '']
+    B --> C[Insert Kategori Induk ke Database]
+    C --> D[Simpan ID Induk ke Memory Map categoryIDMap]
+    D --> E[Ambil Sub-Kategori: Parent != '']
+    E --> F[Cari parent_id dari Memory Map]
+    F --> G[Insert Sub-Kategori dengan parent_id yang Cocok]
+    G --> H[Selesai Hierarki Kategori]
+```
+
+#### 3. Rantai Relasi Lengkap: Kategori $\to$ Produk $\to$ Barcode $\to$ Stok
+Setelah kategori siap, seeder produk:
+1. Membaca `category_id` yang sesuai dari memori.
+2. Memasukkan data produk dengan `atribut_varian` (format JSON generik seperti warna, RAM, dan spesifikasi).
+3. Sekaligus mendaftarkan **Primary Barcode** produk ke tabel `inv_barcodes`.
+4. Mengalokasikan **Stok Awal** (`inv_stocks`) di Gudang Utama Jakarta.
+
+---
+
+### 44.3 Analogi Dunia Nyata: "Menata Rak Toko Buku Baru Sebelum Grand Opening"
+
+Bayangkan seorang manajer toko buku yang sedang mempersiapkan pembukaan cabang baru:
+- **Papan Plang Lorong (Kategori Induk):**
+  Tukang kayu wajib memasang plang besar di langit-langit lorong terlebih dahulu: *"Fiksi & Sastra"*, *"Sains & Teknologi"*, *"Bisnis & Keuangan"*.
+- **Label Rak Sub-Bagian (Sub-Kategori):**
+  Setelah plang lorong terpasang, barulah staf toko menempelkan label kecil di ambalan rak: *"Novel Fantasi"* (di bawah Fiksi), atau *"Pemrograman Komputer"* (di bawah Sains). Tidak mungkin menempel label sub-rak sebelum rak induknya berdiri!
+- **Menata Buku & Menempel Barcode (Produk & Barcode):**
+  Setelah rak dan plang terpasang rapi, barulah karton berisi buku dibuka. Setiap buku diperiksa nomor ISBN barcode-nya, dimasukkan ke katalog komputer, dan diletakkan di rak yang tepat dengan jumlah stok awal yang tercatat di pembukuan gudang.
+
+---
+
+## 🎨 45. Palet Warna Soft & Token Desain UI pada Enterprise ERP
+
+### 45.1 Mengapa Warna Soft (Pastel Tint) Lebih Nyaman di Mata Daripada Warna Neon / Pekat?
+
+Aplikasi ERP Backoffice digunakan oleh staf kasir, admin gudang, dan manajer selama **8-10 jam kerja setiap hari**.
+- **Warna Pekat / Neon (*High Saturation*):**
+  Jika tabel dipenuhi badge merah terang (`#ff0000`), biru neon, atau hijau stabilo, mata operator akan cepat lelah (*visual fatigue*) dan informasi penting justru kehilangan fokus.
+- **Warna Soft Berkarakter (*Tints & Low Saturation with Contrast*):**
+  Menggunakan latar belakang lembut (`50` seperti `#eef2ff` atau `#faf5ff`) dipadu teks berwarna senada yang cukup gelap (`700` seperti `#4338ca` atau `#7e22ce`) serta garis batas tipis (`200`).
+  Hasilnya:
+  1. Data **sangat terbaca** (*high legibility*).
+  2. Tabel terasa hidup dan tidak monoton/kering.
+  3. Perbedaan entitas kunci langsung tertangkap mata dalam sepersekian detik:
+     - **SKU (Kode Produk):** Soft Indigo (`Badge variant="indigo"`) — kesan presisi teknis & kode barang.
+     - **Serial / IMEI (Lacak Unit):** Soft Purple (`Badge variant="purple"`) — identitas unit bernilai tinggi & bergaransi.
+     - **PPN (Pajak):** Soft Cyan (`text-cyan-700 bg-cyan-50`) — pembeda perpajakan yang segar.
+     - **Status Aktif:** Soft Emerald (`Badge variant="success"`) — sinyal aman/siap transaksi.
+     - **Status Draft:** Soft Amber (`Badge variant="warning"`) — peringatan butuh tindakan lanjut.
+
+---
+
+### 45.2 Arsitektur Desain: Component-First & Token Governance
+
+Sesuai aturan arsitektur ERP:
+1. **Tidak Boleh Menulis Hex Sembarangan:**
+   Warna didefinisikan satu kali di `/packages/ui/styles/theme.css` via `@theme` Tailwind CSS v4.
+2. **Komponen Reusable Bertanggung Jawab Penuh:**
+   Komponen `Badge.svelte` diekstensi dengan varian baru (`purple`, `indigo`, `cyan`), didokumentasikan di `COMPONENTS.md`, lalu dipakai di halaman manapun secara bersih:
+   ```svelte
+   <Badge variant="indigo">
+     <span class="font-mono font-semibold">{prod.sku}</span>
+   </Badge>
+   <Badge variant="purple">Serial / IMEI</Badge>
+   ```
+
+---
+
+### 45.3 Analogi Dunia Nyata: "Stiker Sticky Notes Pastel di Atas Map Dokumen Hitam"
+
+Bayangkan seorang eksekutif yang bekerja dengan binder arsip kulit hitam mewah (**Obsidian Black Theme**):
+- Jika semua kertas, dokumen, dan pembatas arsip warnanya hitam dan abu-abu kusam, manajer harus membaca teks kata-demi-kata hanya untuk menemukan nomor seri atau kode barang.
+- Namun jika manajer menggunakan **stiker penanda warna lembut (*soft pastel sticky tags*)**:
+  - Warna **Lavender/Ungu Soft** untuk dokumen nomor garansi berharga tinggi.
+  - Warna **Biru Indigo Soft** untuk kode katalog gudang.
+  - Warna **Hijau Daun Soft** untuk berkas yang sudah disetujui.
+- Dokumen tetap terlihat sangat berkelas dan elegan di dalam map hitam, tetapi mata langsung dapat memilah dan mengelompokkan jenis dokumen dengan cepat tanpa pusing!
+
+---
+
+## 📐 46. Ergonomi Form Dialog Modal: Hukum Kedekatan (*Law of Proximity*) & Layout 2-Kolom
+
+### 46.1 Mengapa Formulir Vertikal yang Terlalu Panjang Tidak Efisien?
+
+Pada aplikasi operasional toko, operator memasukkan puluhan hingga ratusan produk baru ke sistem:
+1. **Form 1-Kolom Panjang ke Bawah:**
+   - Memaksa operator terus menggulir (*scrolling*) layar ke bawah.
+   - Sering memicu *mental fatigue* karena pengguna tidak bisa melihat gambaran utuh data produk dalam satu pandangan (*one-glance visibility*).
+2. **Form 2-Kolom Terstruktur (*Split Context*):**
+   - **Kolom Kiri (Data Finansial & Inti):** SKU, nama, kategori, harga beli, harga jual, dan pajak.
+   - **Kolom Kanan (Konfigurasi Fisik & Spesifikasi):** Penanda unit fisik ber-IMEI dan atribut varian (warna, RAM, dimensi).
+   - Layout menjadi seimbang, tinggi modal berkurang drastis, dan seluruh field utama muat di layar desktop tanpa scroll berlebih.
+
+---
+
+### 46.2 Prinsip Kedekatan (*Gestalt Law of Proximity*): Harga dan PPN
+
+- **Kesalahan Umum:**
+  Menaruh input *Harga Jual* di atas, tetapi opsi *Sudah Termasuk PPN* ditaruh di dasar form bersama checkbox lain yang tidak ada hubungannya. Operator sering lupa mencentangnya karena lokasinya jauh dari nominal uang.
+- **Solusi UX:**
+  Menempatkan checkbox PPN bersatu di dalam satu kontainer dengan *Harga Pokok* dan *Harga Jual*. Mata pengguna langsung menghubungkan keterkaitan antara nominal harga yang diketik dengan status pajaknya secara alami.
+
+---
+
+### 46.3 Analogi Dunia Nyata: "Formulir Faktur Pembelian Kertas (Nota Dua Kolom)"
+
+Bayangkan nota formulir penerimaan barang resmi di kantor distributor:
+- Di sisi **kiri faktur**: Tertulis jelas harga per unit, kalkulasi PPN 11%, dan total nominal uang.
+- Di sisi **kanan faktur**: Terdapat kolom stempel nomor kartu garansi / serial number pabrik serta lembar checklist spesifikasi barang.
+- Pembukuan keuangan dan pengecekan fisik barang berdampingan rapi tanpa perlu membolak-balik halaman berkali-kali!
+
+---
+
+## 📝 47. Arsitektur Komponen WYSIWYG Editor: Jembatan Format Antara Backoffice & Storefront
+
+### 47.1 Mengapa Kita Membangun Native WYSIWYG Editor (*Zero Dependency*)?
+
+Banyak pengembang terburu-buru menginstal library pihak ketiga yang besar (seperti Quill atau TipTap dengan puluhan plugin). Namun dalam proyek monorepo modular berstandar enterprise:
+1. **Masalah Pustaka Berat:**
+   - Sering menimbulkan konflik *peer dependency*, bundle membengkak ratusan kilobyte, dan masalah reaktivitas pada rilis terbaru Svelte 5 runes.
+2. **Kekuatan Native Selection & `contenteditable` API:**
+   - Browser modern sudah memiliki mesin *rich text editing* bawaan yang sangat cepat, ringan, dan stabil.
+   - Komponen [RichTextEditor.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/packages/ui/components/RichTextEditor.svelte) membungkus API native tersebut dengan antarmuka deklaratif Svelte 5 (`$bindable`), desain konsisten Tailwind CSS v4 `@theme`, dan ikon resmi Heroicons.
+
+---
+
+### 47.2 Perjalanan Data: Dari Backoffice Admin Menuju Storefront E-Commerce
+
+```mermaid
+flowchart LR
+    A[Admin Backoffice:<br>RichTextEditor] -->|Simpan String HTML| B[(Database PostgreSQL:<br>inv_products.description)]
+    B -->|API JSON Response| C[Storefront SSR:<br>SvelteKit Halaman Detail]
+    C -->|Render {@html ...}| D[Tampilan Pengunjung E-Commerce:<br>Heading, Bold, Bullet List]
+```
+
+1. **Input di Backoffice:** Admin mengetik poin-poin spesifikasi, judul fitur, dan teks tebal melalui antarmuka visual WYSIWYG.
+2. **Penyimpanan di Database:** Disimpan sebagai string HTML semantik standar (`<h2>`, `<p>`, `<ul>`, `<li>`, `<strong>`, `<a>`).
+3. **Penyajian di Storefront:** Modul Storefront (SSR) dapat langsung merender tag HTML tersebut ke dalam kontainer `<article class="prose">` menggunakan sintaks Svelte `{@html product.description}`. Halaman publik langsung terlihat profesional dan ramah SEO!
+
+---
+
+### 47.3 Analogi Dunia Nyata: "Mesin Ketik Cetak Brosur di Kantor Percetakan"
+
+Bayangkan bagian editorial di sebuah toko ritel besar:
+- Jika staf hanya diberi kertas coretan pulpen biasa (**Textarea Polos**), staf tidak bisa menentukan ukuran judul, huruf tebal, atau daftar poin. Brosur etalase toko akan terlihat membosankan seperti tumpukan teks mentah.
+- Namun jika staf disediakan **Meja Tata Letak Cetak Brosur (*WYSIWYG Editor*)**:
+  - Tombol stempel judul besar (**H2**) untuk *"Fitur Unggulan"*.
+  - Garis cetak tebal (**Bold**) untuk *"Garansi Resmi 2 Tahun"*.
+  - Stempel poin bertingkat (**Bullet List**) untuk rincian *"Spesifikasi Teknis"*.
+- Brosur yang selesai dicetak di meja redaksi (Backoffice) akan langsung siap dipajang di etalase kaca depan mall (**Storefront**) dengan tampilan yang memukau calon pembeli!
+
+---
+
+## 🔍 48. Komponen Select2 (Combobox Searchable): Mengatasi Keterbatasan Native HTML Select
+
+### 48.1 Mengapa Elemen Native `<select>` Tidak Memadai untuk Skala Enterprise?
+
+Tag bawaan browser `<select>` memiliki sejumlah kelemahan fatal pada sistem ERP:
+1. **Tidak Ada Fitur Pencarian Cepat:**
+   - Jika toko memiliki 200 kategori produk, pengguna harus menggulir (*scrolling*) panjang ke bawah dan mencari satu per satu dengan mata.
+2. **Tampilan Kaku & Tidak Mendukung Informasi Kontekstual:**
+   - Tag `<option>` di browser bawaan tidak bisa menampilkan subteks hierarki (misal: *"Apple iPhone (Induk: Smartphone)"*) dan tidak dapat disesuaikan styling warnanya.
+3. **Solusi Select2 Buatan Sendiri (*Custom Combobox*):**
+   - Komponen [Select2.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/packages/ui/components/Select2.svelte) menyediakan kotak input filter pencarian real-time di bagian atas menu dropdown.
+   - Dilengkapi navigasi keyboard instan (`ArrowUp`, `ArrowDown`, `Enter`, `Escape`), tombol pembersih satu klik (*clearable*), dan deteksi klik luar (*click-outside*) yang intuitif.
+
+---
+
+### 48.2 Analogi Dunia Nyata: "Daftar Menu Kertas Tebal vs. Pramusaji Cerdas dengan Tablet"
+
+Bayangkan seorang pelanggan yang ingin memesan makanan di restoran berkapasitas besar:
+- **Native `<select>` (Buku Menu Tebal 50 Halaman):**
+  Pelanggan harus membolak-balik halaman demi halaman untuk menemukan *"Kopi Susu Aren"*. Butuh waktu lama dan melelahkan.
+- **`Select2` (Pramusaji Cerdas dengan Fitur Pencarian Cepat):**
+  Pelanggan cukup menyebutkan *"Kopi"*, pramusaji langsung menyaring dan menunjukkan 3 pilihan kopi yang tersedia dalam sekejap mata. Pemesanan selesai dalam 2 detik!
+
+---
+
+## 🏷️ 49. Pola Master-Detail UX & Colocation Tombol Aksi: Redesain Halaman Barcode Produk
+
+### 49.1 Problem: UX "Blind Selection" pada Dropdown Select Tunggal
+
+Sebelumnya, halaman manajemen barcode menggunakan elemen dropdown `<Select>` tunggal di panel kiri. Pola ini memiliki kelemahan ergonomis (*UX friction*):
+1. **Pengguna "Buta" Katalog:** Pengguna tidak dapat melihat sekilas produk apa saja yang ada di toko, berapa jumlahnya, atau atribut penting seperti SKU dan status nomor seri (IMEI).
+2. **Disorientasi Aksi (*Action Disorientation*):** Tombol `+ Tambah Barcode` diletakkan di pojok kanan atas halaman (header global), padahal tombol tersebut hanya relevan dengan tabel daftar barcode di panel kanan. Pengguna bingung apakah tombol tersebut untuk menambah produk atau menambah barcode.
+
+---
+
+### 49.2 Solusi: Pola Master-Detail View (Katalog Terbuka & Detail Relasi)
+
+Untuk menghadirkan pengalaman pengguna kelas enterprise yang mulus, diterapkan arsitektur antarmuka **Master-Detail**:
+
+```mermaid
+flowchart LR
+    subgraph Master["Panel Kiri (Master: lg:col-span-5)"]
+        S[SearchInput:<br>Cari Nama, SKU, Merek]
+        T[Tabel Katalog Produk Interaktif:<br>Klik Baris -> Pilih Produk]
+        C[Info Ringkas Produk Aktif]
+        S --> T
+        T --> C
+    end
+
+    subgraph Detail["Panel Kanan (Detail: lg:col-span-7)"]
+        H["Header Barcode:<br>Judul + Count + [ + Tambah Barcode ]"]
+        B[Tabel Daftar Barcode Terdaftar:<br>EAN-13, UPC, Status Primary/Sekunder]
+        H --> B
+    end
+
+    T -.->|Trigger loadProductBarcodes| Detail
+```
+
+1. **Panel Kiri (Master View):**
+   - Menghadirkan kotak pencarian instan ([SearchInput.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/packages/ui/components/SearchInput.svelte)) dengan debouncing.
+   - Tabel katalog produk yang bisa diklik (*clickable rows*) dengan indikator visual aktif (`border-l-4 border-l-primary-600 bg-primary-50/80`).
+   - Setiap baris langsung memperlihatkan nama produk, merek, badge SKU (Indigo soft), dan status Serial/IMEI (Purple soft).
+   - Pengguna dapat menggulir katalog secara mandiri dengan area tabel *scrollable* ber-header *sticky*.
+
+2. **Panel Kanan (Detail View & Colocation of Action Buttons):**
+   - Tombol `+ Tambah Barcode` dipindahkan langsung ke dalam header panel *"Daftar Barcode Terdaftar"*.
+   - Ini menerapkan prinsip UX **Action Colocation**: tombol aksi ditempatkan sedekat mungkin secara visual dengan tabel/data yang akan dimanipulasinya.
+   - Tombol secara otomatis dinonaktifkan (`disabled={!selectedProductId}`) jika belum ada produk yang dipilih dari katalog sebelah kiri.
+
+---
+
+### 49.3 Analogi Dunia Nyata: "Buku Rak Arsip Gudang & Label Stempel Barcode"
+
+Bayangkan seorang petugas gudang logistik:
+- **Pola Lama (Mata Tertutup / Buta):** Petugas diminta mengambil satu map barang secara acak dari lubang sempit tanpa melihat daftar rak, lalu harus berjalan jauh ke meja depan kantor hanya untuk mengambil stempel barcode.
+- **Pola Baru Master-Detail (Rak Etalase Transparan):**
+  - Di sebelah kiri (**Master**), terdapat **Rak Etalase Kaca Terbuka** yang tersusun rapi dengan label nama, merek, dan nomor SKU yang jelas. Petugas cukup menunjuk barang yang diinginkan.
+  - Tepat di sebelah kanan barang tersebut (**Detail**), tersedia wadah stempel barcode khusus untuk barang tersebut, lengkap dengan tombol stempel baru (**`+ Tambah Barcode`**) tepat di atas wadahnya. Petugas tidak perlu mondar-mandir dan alur kerja menjadi sangat cepat, jelas, dan akurat!
+
+---
+
+## 🛡️ 50. Konsistensi Pola Master-Detail: Penetapan Garansi Produk (Product Warranties)
+
+### 50.1 Prinsip Konsistensi Pengalaman Pengguna (*Design Consistency Principle*)
+
+Salah satu prinsip terpenting dalam pengembangan aplikasi kelas *enterprise* adalah **Konsistensi Desain**:
+- Jika admin toko sudah terbiasa dengan alur pencarian katalog dan tabel relasi di halaman **Barcode Produk**, maka ketika mereka beralih ke halaman **Garansi Produk**, mereka tidak boleh dipaksa beradaptasi dengan mental model yang berbeda.
+- Mempertahankan pola yang seragam (*Predictable UI*) menurunkan beban kognitif (*cognitive load*), mempercepat kecepatan kerja operator, dan meniadakan potensi salah input.
+
+---
+
+### 50.2 Penerapan pada Tab Penetapan Garansi Produk
+
+Halaman [master/warranties/+page.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/routes/(app)/master/warranties/+page.svelte) memiliki dua tab:
+1. **Tab 1: Template Kebijakan:**
+   - Berisi tabel pustaka template garansi (Garansi Toko 7 Hari Tukar Baru, Garansi Resmi 1 Tahun, dsb.) dan tombol `+ Buat Template Garansi` di header atas.
+2. **Tab 2: Penetapan ke Produk (Master-Detail):**
+   - **Sisi Kiri (`lg:col-span-5`):** Kotak pencarian seketika `SearchInput` + tabel produk interaktif (*clickable rows*) berindikator aktif, dilengkapi kartu informasi produk terpilih dan pengingat aturan bisnis (*Business Invariant: maks 1 toko & 1 pabrik aktif per produk*).
+   - **Sisi Kanan (`lg:col-span-7`):** Tabel daftar garansi aktif produk tersebut, dengan tombol aksi `+ Pasang Garansi ke Produk` dipindahkan langsung ke dalam header panel kanan (*colocated action button*).
+   - Tombol global di header atas otomatis disembunyikan saat berada di Tab 2 agar fokus admin tetap terarah pada panel garansi yang sedang dikelola.
+
+---
+
+### 50.3 Analogi Dunia Nyata: "Kartu Garansi Toko Elektronik di Meja Kasir"
+
+Bayangkan meja kasir toko komputer:
+- Konsumen datang membawa laptop yang dibeli.
+- Kasir tidak perlu membuka laci lemari rahasia untuk menebak laptop apa yang dimaksud (**Dropdown Buta**).
+- Kasir membuka buku katalog laptop di sisi kiri meja (**Master Panel**), memilih model laptop yang sesuai dengan sekali tunjuk.
+- Di sisi kanan meja (**Detail Panel**), kartu garansi toko dan garansi resmi pabrik langsung tertera di depan mata, lengkap dengan stempel `+ Pasang Garansi ke Produk` tepat di sebelah kartu tersebut. Proses klaim dan pencatatan garansi selesai dalam hitungan detik dengan akurasi 100%!
+
+
+## 🔌 51. Keselarasan Kontrak API (*Contract Alignment*) & Prinsip Toleransi Parameter Query
+
+### 51.1 Bahaya *Silent Parameter Mismatch* pada REST API
+
+Pada kasus lookup barcode:
+1. Frontend mengirim query parameter `?barcode=8806098765432`.
+2. Backend Go membaca `r.URL.Query().Get("code")`.
+3. Karena kunci yang dibaca berbeda (`code` vs `barcode`), backend mendapati nilai kosong lalu melempar respon `400 Bad Request`.
+4. Di frontend, kode penangkap error langsung menganggap `ApiError` sebagai *"Barcode tidak terdaftar"* seolah-olah terjadi `404 Not Found`. Akibatnya, pengguna mengira data di database hilang atau scanner rusak!
+
+---
+
+### 51.2 Penerapan *Postel's Law* (Robustness Principle) di Backend & Client
+
+Untuk mencegah friksi serupa di masa mendatang, diterapkan prinsip arsitektur perangkat lunak terkenal dari Jon Postel:
+> *"Be conservative in what you send, be liberal in what you accept"*
+> *(Kirim data sepresisi mungkin, namun terimalah input secara fleksibel dan toleran).*
+
+1. **Backend yang Ramah (*Liberal in Acceptance*):**
+   - Handler backend memeriksa parameter utama `code`. Jika tidak ditemukan, ia memeriksa alternatifnya `barcode`.
+   - Hal serupa diterapkan pada serial unit lookup: memeriksa `sn`, lalu mencoba fallback ke `serial`.
+2. **Client yang Menjamin Kompatibilitas (*Conservative in Sending*):**
+   - API client frontend mengirim kedua parameter (`?code=...&barcode=...`) agar kompatibel baik dengan backend versi lama maupun versi baru.
+3. **Penyempurnaan Error Status Discrimination:**
+   - Frontend memeriksa status HTTP secara spesifik (`err.status === 404`). Jika statusnya adalah 400 atau 500, antarmuka akan menampilkan pesan kesalahan teknis yang sebenarnya, bukan pesan palsu "tidak terdaftar".
+
+---
+
+### 51.3 Analogi Dunia Nyata: "Loket Teller Bank dengan Kolom Nama KTP & Nama Panggilan"
+
+Bayangkan seorang nasabah datang ke bank:
+- Nasabah menulis nama di formulir dengan nama alias: *"Pak Budi"*.
+- **Sistem Kaku Tanpa Toleransi:** Teller bank langsung menolak nasabah: *"Orang bernama Budi tidak ada di dunia ini!"* (padahal di buku tabungan tercatat *"Budiman Santoso"*). Nasabah bingung dan panik.
+- **Sistem Cerdas (Postel's Law):** Teller membaca kolom: jika nama KTP tidak ada, teller mengecek kolom nama alias (*fallback*). Jika cocok dengan *"Budiman Santoso"*, transaksi langsung diproses dengan lancar tanpa ada penolakan yang membingungkan nasabah!
+
+---
+
+## 🖨️ 52. Arsitektur Cetak Label Barcode & Komponen SVG Code 128 Native
+
+### 52.1 Standar Industri Code 128 (ISO/IEC 15417) pada Retail Modern
+- **Mengapa Code 128?** Merupakan standar barcode linear (1D) paling luas dan serbaguna di dunia retail, logistik, dan pergudangan elektronik modern.
+- **Kepadatan Tinggi (*High Density*):** Mampu mengkodekan karakter alfanumerik (huruf A-Z, angka 0-9, dan simbol khusus) dengan modul garis yang rapat dan ringkas. Hal ini sangat krusial agar stiker label berukuran mini (seperti ukuran 40x30 mm atau 50x30 mm) tetap dapat memuat kode panjang secara proporsional.
+- **Integritas Data Matematis (Modulo-103 Check Digit):** Sebelum kode diterjemahkan menjadi pola garis hitam-putih, algoritma menghitung angka pemeriksa (*checksum*) berbasis pembagian sisa 103. Jika ada satu garis yang cacat atau buram saat discan oleh laser kasir, scanner langsung menolak data yang rusak alih-alih salah membaca angka.
+
+---
+
+### 52.2 Arsitektur *Zero-Dependency* SVG Barcode Generator
+Alih-alih membebani proyek dengan library eksternal berukuran puluhan kilobyte (seperti `JsBarcode`), kita membangun generator resmi di `@erp/ui` (`Barcode.svelte`):
+1. **Representasi Modul Garis & Spasi:**
+   - Setiap karakter dalam tabel Code 128 diwakili oleh 6 segmen bergantian (3 garis hitam dan 3 spasi putih) dengan total lebar 11 modul satuan.
+   - Karakter STOP diakhiri pola khusus selebar 13 modul.
+2. **Kekuatan Vektor SVG vs Canvas/Bitmap:**
+   - Garis-garis barcode digambar menggunakan elemen native `<rect>` SVG.
+   - **Ketajaman 100% Vektor:** Bebas artefak dan tidak akan pernah buram atau pecah, baik saat dicetak pada printer thermal ekonomis 203 DPI, printer industri 300 DPI, maupun printer laser kantor ukuran A4.
+   - **Ringan & Reaktif:** Terintegrasi langsung dengan ekosistem Svelte 5 Runes (`$derived`), langsung memperbarui gambar barcode seketika saat nilai teks kode berubah.
+
+---
+
+### 52.3 Mekanisme Pencetakan Label: Isolasi Window & CSS Paging
+Mengapa kita tidak langsung memanggil `window.print()` pada halaman backoffice?
+- Halaman Backoffice memiliki sidebar navigasi, header, padding, dan tema warna Obsidian yang dirancang untuk layar monitor, bukan untuk kertas stiker label.
+- **Pola Jendela Cetak Terisolasi (*Isolated Print Window*):**
+  1. Frontend membuat jendela virtual sementara via `window.open('', '_blank')`.
+  2. Jendela ini diisi HTML murni tanpa CSS aplikasi umum, melainkan CSS cetak presisi:
+     - **Mode Thermal Sticker:** `@page { size: 40mm 30mm; margin: 0; }` dengan `page-break-after: always` untuk setiap potongan label.
+     - **Mode Lembar A4 (Grid Sheet):** `@page { size: A4; margin: 10mm; }` dengan grid multi-kolom yang rapi untuk kertas stiker lembaran (misal kertas Tom & Jerry).
+  3. Menyalin SVG barcode vektor murni sebanyak jumlah rangkap yang diminta operator (`printCopies`).
+  4. Memicu dialog cetak sistem browser (`window.print()`).
+  5. Setelah operator selesai mencetak atau menutup dialog, jendela pembantu otomatis menutup diri via event listener `window.onafterprint = () => window.close()`.
+
+---
+
+### 52.4 Analogi Dunia Nyata: "Mesin Cap Stempel Baja Presisi vs Kertas Fotokopi Buram"
+
+- **Mencetak barcode dengan gambar raster biasa (PNG/JPEG):**
+  - Ibarat membuat stempel dari kertas fotokopi yang buram dan melebar tintanya saat ditekan ke stiker produk.
+  - Sinar laser kasir akan kebingungan membedakan mana garis batas hitam dan spasi putih, sehingga kasir harus menembak scanner berulang-ulang hingga pembeli mengantre panjang.
+- **Komponen Barcode SVG Code 128 Native:**
+  - Ibarat **Mesin Cetak Cap Stempel Baja Presisi Milimeter**.
+  - Setiap bilah logam diukur dengan perhitungan matematika mutlak. Ketika stiker ditempel di dus barang elektronik, pantulan sinar laser barcode scanner kasir langsung membaca data dengan sempurna dalam tempo sepersekian detik pada tembakan pertama!
+
+---
+
+## 🔄 53. Pola UX Master-Detail Dua Arah (*Bi-Directional State Synchronization*)
+
+### 53.1 Menghubungkan Pemindaian Cepat dengan Ruang Kerja Operator
+- **Masalah Antarmuka Terputus (*Disconnected State*):**
+  - Pada antarmuka awal, simulator scan laser hanya menampilkan banner hijau verifikasi di bagian atas layar.
+  - Namun ruang kerja operator di bawahnya (Katalog Produk di kiri dan Daftar Barcode di kanan) tetap tertinggal pada produk sebelumnya (misal MacBook Air). Operator terpaksa harus mencari ulang dan mengklik produk secara manual.
+- **Solusi Arsitektur UX Reaktif (*Reactive Auto-Selection*):**
+  1. **Sinkronisasi State Otomatis:** Saat respons `lookupBarcode` berhasil diterima, sistem seketika menetapkan `selectedProductId = res.product.id`.
+  2. **Toleransi Filter Pencarian:** Jika operator sebelumnya sedang mengetik kata kunci pencarian yang tidak mencakup nama produk baru tersebut, sistem secara cerdas mereset filter agar produk dapat langsung terlihat di tabel katalog.
+  3. **Auto-Scroll Elemen Aktif:** DOM baris produk yang baru dipilih digulirkan secara halus ke viewport (`scrollIntoView({ behavior: 'smooth', block: 'nearest' })`).
+  4. **Pemuatan Barcode & Highlight Cocok:** Panel detail kanan langsung memuat daftar barcode produk tersebut, dan baris barcode yang identik dengan hasil tembakan scanner diberi penanda visual khusus berwarna hijau Emerald (*Cocok Scan*).
+
+---
+
+### 53.2 Analogi Dunia Nyata: "Pustakawan Cerdas yang Langsung Membukakan Halaman Buku"
+
+- **Sistem Pasif / Terputus:**
+  - Anda pergi ke komputer katalog perpustakaan dan mengetik nomor barcode buku `8806095312345`.
+  - Komputer sekadar memunculkan tulisan di layar: *"Buku 'Samsung Galaxy S24 Manual' ditemukan"*.
+  - Anda tetap harus berjalan menyusuri lorong rak yang luas, mencari manual di mana posisi buku itu berada, lalu membolak-balik halamannya satu per satu.
+- **Sistem Reaktif Dua Arah (Bi-Directional Sync):**
+  - Begitu Anda menembakkan scanner ke barcode buku di meja resepsionis, rak perpustakaan di samping Anda otomatis bergeser ke kategori yang tepat (**Master Auto-Select**), buku yang dicari langsung tersorot lampu (**Auto-Scroll**), dan lembar halaman bab spesifik langsung terbuka di depan mata Anda (**Detail Barcode Highlight**)!
+
+---
+
+## 🖼️ 54. Manajemen Media & Upload Berkas Produk pada ERP Modular
+
+### 54.1 Desain Database: Relasi 1-to-N Produk dan Foto (`inv_product_images`)
+- **Mengapa Tidak Menyimpan Gambar di Kolom Produk Langsung?**
+  - Satu produk retail (misalnya smartphone atau laptop) hampir selalu membutuhkan lebih dari satu foto: tampak depan, tampak belakang, port samping, dan kelengkapan kotak.
+  - Jika kita menyimpan URL gambar sebagai array atau kolom tunggal di tabel `inv_products`, kita akan kesulitan mengatur foto mana yang menjadi sampul utama (*primary image*), urutan tampilan (*sort order*), maupun metadata gambar di masa mendatang.
+- **Skema Tabel `inv_product_images`:**
+  - `id`: UUIDv7 time-ordered sebagai primary key unik.
+  - `product_id`: UUID produk pemiliknya, dengan relasi `ON DELETE CASCADE` (jika produk dihapus, seluruh record fotonya ikut terhapus otomatis di database).
+  - `url`: Path relatif URL gambar (misal `/uploads/products/01921a...jpg`).
+  - `is_primary`: Boolean penanda foto sampul utama yang akan ditampilkan di tabel katalog dan kartu etalase.
+  - `sort_order`: Angka urutan tampilan galeri.
+- **Teknik Subquery Cepat untuk Thumbnail (`primary_image_url`):**
+  - Alih-alih melakukan `JOIN` berat yang menduplikasi baris produk ketika satu produk memiliki banyak foto, repository Go mengambil foto utama secara presisi lewat correlated subquery:
+    ```sql
+    (SELECT url FROM inv_product_images WHERE product_id = p.id AND is_primary = true LIMIT 1) AS primary_image_url
+    ```
+  - Hasilnya sangat ringan dan instan, tetap menjaga waktu respons API dalam hitungan milidetik.
+
+---
+
+### 54.2 Penanganan Upload Berkas Multipart di Go Backend
+- **Prinsip Keamanan Berkas Media:**
+  1. **Batasan Ukuran Berkas (*Max Body Size*):** Membatasi request multipart maksimal 5 MB (`r.Body = http.MaxBytesReader(w, r.Body, 5<<20)`) untuk mencegah serangan *Denial of Service (DoS)* akibat berkas berukuran raksasa.
+  2. **Validasi MIME Type Hakiki:** Mengekstrak header berkas dan memverifikasi MIME type (`image/jpeg`, `image/png`, `image/webp`). Berkas executable (`.exe`, `.sh`, `.php`) langsung ditolak dengan `400 Bad Request`.
+  3. **Sanitasi Nama Berkas dengan UUIDv7:** Jangan pernah menggunakan nama asli berkas dari komputer klien (misal `../../etc/passwd` atau `foto produk.jpg`). Gunakan UUIDv7 baru sebagai nama berkas fisik di disk:
+     ```go
+     filename := fmt.Sprintf("%s%s", uid.NewUUIDv7().String(), ext)
+     ```
+  4. **Pembersihan Berkas Fisik (*Garbage Cleanup*):** Saat admin menghapus foto produk dari sistem, aplikasi tidak hanya menghapus baris di PostgreSQL, tetapi juga menghapus berkas fisiknya dari hard disk server via `os.Remove(filePath)`. Jika foto yang dihapus adalah foto utama, sistem secara otomatis mempromosikan foto tersisa berikutnya menjadi foto utama baru!
+
+---
+
+### 54.3 Pola Unggah Dua Alur di Frontend SvelteKit
+- **Tantangan UX:**
+  - Kasus A: Admin sedang **mengedit produk yang sudah ada** di database -> Foto bisa langsung diunggah (*live upload*) ke server seketika karena `product_id` sudah ada.
+  - Kasus B: Admin sedang **membuat produk baru** yang belum disimpan -> `product_id` belum ada di database! Foto belum bisa dikirim ke endpoint `/api/v1/inventory/products/{id}/images`.
+- **Solusi Arsitektur UI:**
+  - **Pratinjau Instan di Browser:** Saat berkas dipilih via file dialog/drag-and-drop, frontend membuat URL pratinjau lokal menggunakan `URL.createObjectURL(file)` dan menyimpannya di antrean `pendingFiles`.
+  - **Auto-Upload Pasca Pembuatan Produk:** Saat admin menekan tombol "Simpan Produk", frontend terlebih dahulu membuat produk di backend hingga menerima respons `createdProduct.id`, lalu seketika menjalankan perulangan `uploadProductImage(token, createdProduct.id, file)` untuk mengunggah seluruh berkas antrean secara berurutan di latar belakang.
+  - **Pembersihan Memori:** Seluruh blob URL lokal dibersihkan via `URL.revokeObjectURL(url)` untuk mencegah kebocoran memori pada browser.
+
+---
+
+### 54.4 Static File Serving pada Arsitektur Single-Tenant Go
+- **Konsep Teknis:**
+  - Pada server Go monolithic, kita memanfaatkan router bawaan `net/http` untuk melayani folder `./uploads` sebagai berkas statis:
+    ```go
+    fileServer := http.FileServer(http.Dir("./uploads"))
+    mux.Handle("GET /uploads/", http.StripPrefix("/uploads/", fileServer))
+    ```
+- **Keunggulan untuk Single-Tenant On-Premise:**
+  - Sangat mandiri (*self-contained*), tidak membutuhkan layanan cloud object storage berbayar seperti AWS S3 atau Google Cloud Storage yang rumit dan membutuhkan koneksi internet konstan. Toko retail dapat berjalan offline atau dalam jaringan lokal (LAN) toko secara 100% mandiri!
+
+---
+
+### 54.5 Analogi Dunia Nyata: "Album Foto Etalase Toko dan Album Fisik di Lemari Arsip"
+
+- **Database `inv_product_images` = Kartu Indeks Daftar Foto di Meja Resepsionis.**
+  - Kartu indeks hanya mencatat: *"Foto #1: tampak depan (bintang emas/sampul utama), Foto #2: tampak samping"*.
+  - Meja resepsionis tidak menimbun tumpukan kertas foto tebal di atas mejanya (database tidak menyimpan binary gambar raksasa), melainkan hanya nomor dan alamat simpannya.
+- **Folder `./uploads/products/` = Lemari Arsip Khusus Cetak Foto.**
+  - Foto fisik sebenarnya disimpan rapi di dalam laci khusus yang kering dan bernomor acak anti-tertukar (**UUIDv7**).
+  - Ketika seorang pembeli bertanya di etalase, pelayan cukup melihat kartu indeks, lalu mengambil foto dari laci lemari arsip dengan cepat (**Static File Server**).
+- **Tombol "Jadikan Utama" = Mengganti Foto yang Dipasang di Bingkai Etalase Kaca Depan Toko.**
+  - Anda punya 5 foto kamera Sony. Dengan sekali geser, Anda memindahkan foto terbaik ke bingkai kaca depan toko (**`is_primary = true`**), sementara foto-foto lainnya tetap tersimpan rapi di dalam album di belakangnya!
+
+---
+
+## 🌳 55. Representasi Hierarki Pohon Data (Tree Structure) & Rekursi di Svelte 5
+
+### 55.1 Pola Adjacency List: Menyimpan Pohon di Database Relasional
+- **Masalah Struktur Bersarang (*Nested Object*):**
+  - Database relasional (PostgreSQL) tidak menyimpan data dalam bentuk pohon bertingkat JSON mentah, melainkan sebagai baris-baris datar tabel biasa (`inv_categories`).
+- **Pola Adjacency List (Daftar Ketetanggaan):**
+  - Setiap baris cukup menyimpan satu kolom penunjuk sederhana: `parent_id` (berisi ID induknya, atau `NULL` jika merupakan kategori akar/utama).
+  - Keunggulan: Sangat hemat kolom, indeks cepat, dan mudah memindahkan suatu cabang ke induk baru hanya dengan mengubah satu nilai `parent_id`.
+
+---
+
+### 55.2 Rekursi & Algoritma Transformasi di Frontend
+- **Mengapa Dibangun di Sisi Klien (*Client-Side Tree Construction*)?**
+  - Data kategori umumnya berukuran kecil (puluhan hingga ratusan baris). Mengirim flat array via API JSON jauh lebih efisien dalam bandwidth jaringan dibanding format pohon JSON yang membengkak.
+- **Langkah Algoritma:**
+  1. Buat pemetaan `parentMap` berstruktur `parent_id -> CategoryResponse[]`.
+  2. Kumpulkan simpul akar (**Root Nodes**): Kategori yang `parent_id`-nya `null` atau kosong.
+  3. Jalankan fungsi rekursif `buildNode(category, level, visited)`:
+     - Cari semua kategori di `parentMap` yang memiliki `parent_id == category.id`.
+     - Panggil kembali `buildNode` untuk setiap anak tersebut pada `level + 1`.
+     - Gunakan `SvelteSet` untuk mencatat `visited` agar sistem kebal terhadap anomali data siklus (misal: A mengarah ke B, dan B mengarah ke A).
+     - Hitung jumlah anak langsung (`children.length`) serta akumulasi seluruh turunan (*total descendants*).
+
+---
+
+### 55.3 Self-Referential Snippets pada Svelte 5 Runes
+- **Fitur Baru Svelte 5:**
+  - Pada Svelte versi terdahulu (Svelte 3/4), merender pohon rekursif memerlukan tag `<svelte:self>` atau membuat berkas komponen rekursif terpisah.
+  - Di Svelte 5, kita dapat menggunakan **Self-Referential Snippets**:
+    ```svelte
+    {#snippet treeNode(node: CategoryTreeNode)}
+      <div>
+        <span>{node.category.name}</span>
+        {#if node.children.length > 0 && isExpanded(node.category.id)}
+          <div class="ml-6 border-l-2 pl-4">
+            {#each node.children as child (child.category.id)}
+              {@render treeNode(child)} <!-- Memanggil dirinya sendiri secara rekursif -->
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/snippet}
+    ```
+  - Sangat ringkas, hemat memori, dan tetap memiliki type safety TypeScript 100%!
+
+---
+
+### 55.4 Reaktivitas Koleksi: `SvelteMap` & `SvelteSet` (`svelte/reactivity`)
+- **Mengapa ESLint Menolak `new Map()` dan `new Set()` biasa?**
+  - Di JavaScript murni, mutasi pada `Map` (`map.set(...)`) dan `Set` (`set.add(...)`) tidak memicu reaktivitas bawaan karena referensi objeknya tidak berubah.
+  - Di Svelte 5, package `svelte/reactivity` menyediakan pembungkus reaktif resmi: `SvelteMap` dan `SvelteSet`.
+  - Setiap penambahan, penghapusan, atau perubahan isi langsung dideteksi oleh sistem reaktivitas runes (`$derived` dan `$effect`) tanpa perlu menulis ulang referensi objek (`map = new Map(map)`).
+
+---
+
+### 55.5 Analogi Dunia Nyata: "Daftar Kartu Silsilah Keluarga vs Pohon Bagan Organisasi"
+
+- **Tabel Database (Daftar Tabel) = Lembar KTP / Akta Kelahiran di Kantor Camat.**
+  - Di lembar KTP Anda tertulis: *"Nama: Budi, Nama Ayah: Joko"*.
+  - Di lembar KTP Joko tertulis: *"Nama: Joko, Nama Ayah: Slamet"*.
+  - Data tersimpan rapi sebagai tumpukan kertas datar. Namun Anda harus membolak-balik berkas satu per satu untuk tahu siapa kakek buyut dan siapa saja cucunya.
+- **Hierarki Tree View = Bagan Silsilah Pohon Keluarga di Dinding Ruang Tamu.**
+  - Foto Eyang Slamet dipasang di paling atas dengan bingkai emas (**Kategori Utama / Akar**).
+  - Dari Eyang Slamet, ditarik garis cabang ke bawah (**Elbow Branch Lines**) menuju anak-anaknya (**Level 2**), lalu bercabang lagi ke cucu-cucunya (**Level 3**).
+  - Anda bisa melipat ranting keluarga om yang tidak ingin dilihat (**Collapse**), atau membuka seluruh cabang silsilah (**Expand All**) dalam sekejap mata!
+
+---
+
+## 🔍 56. Arsitektur Composite Detail View & Sub-Resource Showcase (Pola Master-Subresource pada Frontend DDD)
+
+### 56.1 Pola Composite Aggregate Presentation: Mengapa Modal Luas, Bukan Halaman Baru?
+- **Konteks Operasional Retail:**
+  - Kasir dan staf gudang sering kali sedang menyaring puluhan produk (misal: mencari produk pada halaman ke-4 dengan filter kategori tertentu).
+  - Jika detail produk dibuka melalui perpindahan rute URL penuh (`/master/products/[id]`), maka saat staf menekan tombol "Kembali", seluruh status tabel (posisi *scroll*, kata kunci pencarian, nomor halaman, dan filter aktif) rentan hilang (*state loss*).
+- **Pendekatan Composite Modal (`size="4xl"` / Max Width):**
+  - Modal luas mempertahankan konteks tabel di latar belakang (*background persistence*).
+  - Membuka modal detail bersifat instan (*zero-route latency*) dengan tetap memberikan ruang visual yang lega untuk menampilkan data multi-dimensi secara terstruktur.
+
+---
+
+### 56.2 Paralelisasi Pengambilan Sub-Resource via `Promise.all`
+- **Pemisahan Tanggung Jawab di Level API:**
+  - Endpoint `GET /api/v1/inventory/products` hanya mengembalikan data agregat produk utama dan `primary_image_url` guna menghemat *payload bandwidth* daftar katalog.
+  - Data sub-resource seperti seluruh galeri foto (`listProductImages`) dan seluruh kode barcode (`listBarcodes`) tidak di-embed sekaligus ke dalam baris tabel (menghindari masalah *N+1 serialization query* di backend).
+- **Konsolidasi Asinkron di Frontend:**
+  ```ts
+  async function openDetailModal(prod: ProductResponse) {
+    detailProduct = prod;
+    showDetailModal = true;
+    loadingDetail = true;
+
+    try {
+      const [barcodesRes, imagesRes] = await Promise.all([
+        listBarcodes(authStore.token, prod.id),
+        listProductImages(authStore.token, prod.id)
+      ]);
+      detailBarcodes = barcodesRes.data ?? [];
+      detailImages = imagesRes.data ?? [];
+    } catch {
+      // Graceful fallback
+    } finally {
+      loadingDetail = false;
+    }
+  }
+  ```
+  - `Promise.all` mengeksekusi kedua permintaan HTTP secara simultan (*concurrently*), sehingga waktu tunggu pengguna sama dengan durasi permintaan terlambat (bukan total waktu akumulasi sekuensial).
+
+---
+
+### 56.3 Komponen Barcode Vektor SVG Asli (Client-Side Rendering)
+- **Kelebihan Menggunakan SVG Vektor (`<Barcode>`):**
+  - **Ketajaman Skala:** Format SVG tidak pecah atau buram pada layar resolusi tinggi (Retina/High-DPI) maupun saat dicetak di atas kertas label.
+  - **Zero Server Overhead:** Server Go tidak perlu memproses rendering gambar bitmap (seperti PNG/JPEG) yang membebani CPU, karena garis-garis barcode dirender murni secara matematis oleh browser klien.
+  - **Aksesibilitas & Utilitas:** Dilengkapi tombol salin satu-klik (*Copy to Clipboard*) dengan umpan balik visual (*Checkmark feedback*) selama 2 detik untuk kenyamanan operasional kasir saat input manual.
+
+---
+
+### 56.4 Analogi Dunia Nyata: "Etalase Toko vs Map Berkas Produk di Bawah Meja Kasir"
+
+- **Tabel Katalog Produk = Rak Etalase Toko Kaca.**
+  - Di rak kaca toko, pengunjung dan staf hanya melihat sekilas nama barang, foto kecil, SKU, dan harga banderol. Informasi ini dirancang ringkas agar pengunjung bisa melihat ratusan barang sekaligus tanpa pusing.
+- **Modal Detail Produk Terpadu = Map Berkas Spesifikasi Lengkap dari Bawah Meja Kasir.**
+  - Ketika calon pembeli bertanya: *"Mas, saya ingin tahu rincian berat barang ini, foto dari berbagai sudut, izin PPN-nya, dan stiker barcode apa saja yang terdaftar di sistem?"*, staf tidak perlu menyuruh pembeli pergi ke gudang arsip di lantai atas (**pindah halaman**).
+  - Staf cukup menarik map berkas tebal dari laci kasir (**buka modal luas**):
+    - Lembar kiri memuat foto resolusi tinggi, rincian margin laba, dimensi berat, serta dokumen spesifikasi teknis lengkap.
+    - Lembar kanan memuat deretan stiker barcode resmi yang siap dipindai oleh alat scanner kasir.
+  - Setelah selesai, map berkas ditutup (**tutup modal**), dan staf langsung kembali melanjutkan obrolan di rak etalase yang sama persis tanpa kehilangan jejak!
+
+---
+
+## 🎛️ 57. Desain Komponen UI Enterprise: Mengapa Searchable Combobox (Select2) Menggantikan Native `<select>` pada Toolbar Filter?
+
+### 57.1 Kelemahan Mendasar Elemen Native HTML `<select>` pada Skala Retail
+1. **Tidak Ada Pencarian Teks Terintegrasi:**
+   - Dropdown bawaan HTML (`<select><option>...</option></select>`) tidak memiliki kotak pencarian di dalam popover.
+   - Pada toko retail dengan 50 sub-kategori atau 30 cabang lokasi, pengguna terpaksa menggulir *scrollbar* ke bawah secara manual dan melelahkan (*poor cognitive ergonomics*).
+2. **Inkonsistensi Visual Antar Sistem Operasi:**
+   - Elemen `<select>` native dirender oleh kernel sistem operasi (tampilan di Windows berbeda dengan macOS, iOS, atau Ubuntu).
+   - Akibatnya, palet warna dan radius tema modern Obsidian (`@theme`, `rounded-xl`, `border-neutral-300`) tidak bisa diterapkan secara presisi pada menu opsi yang muncul.
+
+---
+
+### 57.2 Keunggulan Komponen Custom Select2 (Gen-E Enterprise)
+1. **Pencarian Real-Time Instan:**
+   - Mengetik 2-3 huruf di kotak pencarian popover langsung menyaring daftar ratusan opsi secara instan ($O(N)$ filter memori lokal).
+2. **Navigasi Keyboard Penuh (Keyboard-First Efficiency):**
+   - Staf kasir atau gudang dapat menekan tombol `ArrowDown` / `ArrowUp` untuk memilih dan `Enter` untuk menetapkan pilihan tanpa perlu melepaskan tangan dari keyboard komputer.
+3. **Subtext Kontekstual & Hierarki:**
+   - Mendukung properti opsional `subtext` pada setiap opsi (contoh: menampilkan nama kategori induk *"Induk: Komputer"* atau deskripsi fungsional lokasi *"Operasional Kasir & POS Offline"*).
+4. **Tombol Pembersih Seketika (*Clearable Button*):**
+   - Begitu staf memilih filter tertentu, muncul tombol silang (*X*) di sisi kanan yang memungkinkan staf mengembalikan filter ke keadaan awal ("Semua...") dalam satu kali klik.
+
+---
+
+### 57.3 Harmonisasi Nilai Kosong (`value: ''`): Formulir Input vs Filter Toolbar
+- **Dilema Arsitektur:**
+  - Pada formulir input (misal: pendaftaran produk baru), `value: ''` diartikan sebagai *"Belum Memilih"* atau *"Wajib Dipilih"*.
+  - Pada toolbar filter tabel, `value: ''` diartikan sebagai *"Tampilkan Semua Data"* (bukan eror, melainkan kondisi bebas filter).
+- **Solusi Rekayasa di `Select2.svelte`:**
+  - Opsi berlabel dummy dengan awalan `--` (seperti `-- Pilih Salah Satu --`) diabaikan dari daftar pencarian.
+  - Namun opsi eksplisit seperti `{ value: '', label: 'Semua Kategori' }` atau `{ value: '', label: 'Semua Status' }` diperlakukan sebagai opsi valid yang dapat dipilih kembali oleh staf di dalam menu popover.
+
+---
+
+### 57.4 Analogi Dunia Nyata: "Buku Telefon Tebal Halaman Kuning vs Kolom Pencarian Kontak Pintar di Smartphone"
+
+- **Native HTML `<select>` = Buku Telefon Tebal Halaman Kuning (*Yellow Pages*).**
+  - Anda ingin mencari nomor tukang reparasi kulkas. Anda harus membalik lembar demi lembar buku tebal itu dari huruf A, B, C sampai K secara manual sambil menyipitkan mata mencari baris yang tepat.
+- **Searchable Select2 = Kolom Pencarian Kontak Pintar di Layar Smartphone.**
+  - Anda membuka aplikasi kontak, cukup mengetik *"kulk"*, dan layar langsung menyaring 5.000 kontak menjadi 2 nomor telepon yang relevan dalam hitungan sepersepuluh detik! Terdapat pula tombol silang (*X*) untuk menghapus kata kunci pencarian dalam sekali sentuh.
+
+---
+
+## 📐 58. Ergonomi CSS Flexbox pada Desain Toolbar Enterprise: Mengapa Filter Wajib 1 Baris Sejajar (*1-Row Flex*)?
+
+### 58.1 Konservasi Ruang Vertikal (*Vertical Screen Real Estate*)
+- **Karakteristik Layar Operasional Staf:**
+  - Mayoritas monitor di meja kasir, gudang, maupun meja manajer toko menggunakan rasio layar lebar (*Widescreen 16:9*, resolusi 1080p).
+  - Ruang horizontal (lebar) sangat melimpah, sedangkan ruang vertikal (tinggi) sangat berharga untuk menampilkan baris data tabel sebanyak mungkin tanpa harus banyak menggulir (*scrolling*).
+- **Masalah Tumpukan Vertikal (*Vertical Stacking*):**
+  - Jika input pencarian ditaruh di baris atas dan tombol/dropdown filter ditaruh di baris bawahnya, maka area filter memakan tinggi dua kali lipat (80–100px).
+  - Akibatnya, baris tabel terdorong ke bawah (*push-down effect*), dan jumlah baris data yang terlihat di layar pertama (*above the fold*) berkurang drastis.
+
+---
+
+### 58.2 Pola Arsitektur 1-Row Flex: Gabungan Card Container & Fixed Sizing
+Pada [master/locations/+page.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/routes/(app)/master/locations/+page.svelte):
+```svelte
+<div class="flex flex-col gap-3 rounded-xl border border-neutral-200/80 bg-white p-4 shadow-xs md:flex-row md:items-center md:justify-between">
+    <!-- Kontrol Kiri: SearchInput + Select2 Tipe + Select2 Status -->
+    <div class="flex flex-1 flex-wrap items-center gap-3">
+        <div class="w-full sm:w-72">
+            <SearchInput placeholder="Cari kode, nama, atau alamat..." class="w-full max-w-none" />
+        </div>
+        <div class="w-full sm:w-56">
+            <Select2 options={locationTypeFilterOptions} placeholder="Semua Tipe Lokasi" />
+        </div>
+        <div class="w-full sm:w-48">
+            <Select2 options={locationStatusFilterOptions} placeholder="Semua Status" />
+        </div>
+    </div>
+
+    <!-- Informasi Metrik Kanan -->
+    <p class="text-xs whitespace-nowrap text-neutral-500">Menampilkan X dari Y lokasi</p>
+</div>
+```
+1. **`flex flex-wrap items-center gap-3`:**
+   Membuat ketiga komponen kontrol (`SearchInput`, `Select2 Tipe`, `Select2 Status`) otomatis berjajar menyamping dalam satu baris lurus di layar desktop/tablet.
+2. **Penentuan Lebar Terprediksi (`sm:w-72`, `sm:w-56`, `sm:w-48`):**
+   Mencegah kontrol saling bertabrakan atau menciut berlebihan, serta memberikan kenyamanan visual yang simetris dan rapi.
+3. **Kartu Kontras Bersih (`bg-white shadow-xs`):**
+   Memisahkan area filter secara tegas dari 4 kartu ringkasan metrik di atasnya dan tabel data di bawahnya.
+
+---
+
+### 58.3 Analogi Dunia Nyata: "Meja Kasir Rapi 1 Baris Sejajar vs Meja Bertumpuk Kotak Bertingkat"
+
+- **Toolbar Filter Bertumpuk Vertikal:**
+  - Kasir meletakkan mesin pemindai barcode di atas meja, lalu di depannya ditaruh lagi kotak stempel dan kalkulator bertingkat-tingkat ke atas. Tumpukan ini menghalangi pandangan mata kasir ke keranjang belanjaan pelanggan di depannya!
+- **Toolbar 1-Row Flex Sejajar:**
+  - Kasir menata pemindai barcode, mesin kalkulator, dan terminal kartu debit **berjajar menyamping dalam satu garis horizontal rapi**.
+  - Meja kasir terlihat sangat luas, bersih, dan pandangan mata kasir langsung tertuju lurus ke keranjang barang belanjaan pelanggan (**tabel data**) tanpa terhalang sedikit pun!
+
+---
+
+## 🌳 59. User Intent Defaulting & Penyelarasan Toolbar 1-Row Flex di Halaman Kategori
+
+### 59.1 User Intent Defaulting (Mengutamakan View yang Paling Bernilai Tambah)
+
+- **Konsep Teknis:** Menetapkan nilai awal state reaktif `let activeTab = $state<'table' | 'tree'>('tree');` alih-alih `'table'`.
+- **Mengapa ini penting?**
+  - Kategori produk retail bukanlah sekadar daftar teks acak; nilai bisnis terpentingnya terletak pada **relasi pohon hierarki** (apakah "Kabel Data" berada di bawah "Aksesoris", dsb).
+  - Dengan mengarahkan default ke tampilan Tree, pengguna langsung mendapatkan *bird's-eye view* struktur toko begitu halaman dibuka, tanpa perlu klik ekstra.
+- **Analogi Dunia Nyata:** **Bagan Silsilah Keluarga di Pintu Masuk Museum.**
+  - Saat Anda masuk ke ruang pameran sejarah keluarga kerajaan, hal pertama yang dipasang di dinding utama adalah **bagan silsilah pohon keluarga raksasa**, bukan buku telepon daftar nama alfabetis.
+  - Pengunjung langsung memahami siapa kakek, orang tua, dan anak-cucu hanya dalam 1 lirikan mata!
+
+---
+
+### 59.2 Konsistensi 1-Row Flex pada Tab Tabel Kategori
+
+Pada [master/categories/+page.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/routes/(app)/master/categories/+page.svelte):
+```svelte
+<div class="flex flex-col gap-3 rounded-xl border border-neutral-200/80 bg-white p-4 shadow-xs md:flex-row md:items-center md:justify-between">
+    <div class="flex flex-1 flex-wrap items-center gap-3">
+        <!-- Input Pencarian (Lebar Responsif sm:w-72) -->
+        <div class="w-full sm:w-72">
+            <SearchInput bind:value={searchQuery} placeholder="Cari nama kategori..." class="w-full max-w-none" />
+        </div>
+
+        <!-- Filter Hierarki via Select2 (sm:w-64) -->
+        <div class="w-full sm:w-64">
+            <Select2 options={hierarchyFilterOptions} bind:value={selectedHierarchyFilter} placeholder="Semua Hierarki" clearable={false} />
+        </div>
+    </div>
+
+    <!-- Ringkasan Hasil Pencarian di Sebelah Kanan -->
+    {#if searchQuery || selectedHierarchyFilter !== 'all'}
+        <p class="text-xs whitespace-nowrap text-neutral-500">
+            Ditemukan <span class="font-semibold text-neutral-800">{filteredCategories.length}</span> dari {totalCategories} kategori
+        </p>
+    {/if}
+</div>
+```
+
+- **Keunggulan Pola Desain:**
+  1. **Visual Harmonious:** Menggunakan palet Obsidian monokrom (`border-neutral-200/80 bg-white shadow-xs`) yang identik dengan halaman Lokasi dan Katalog Produk.
+  2. **1-Row Flex Sejajar:** Kotak input dan dropdown `Select2` berdampingan rapi secara horizontal pada layar desktop (`md:flex-row`), dan otomatis menurun rapi secara responsif pada layar ponsel (`flex-col`).
+  3. **Zero Overflow:** Kelas `whitespace-nowrap` mencegah teks ringkasan patah baris canggung saat pengguna mengetik filter.
+
+---
+
+### 59.3 Analogi Dunia Nyata: "Dua Lensa Kacamata: Lensa Panorama (Tree) vs Lensa Buku Catatan (Tabel)"
+
+- **Lensa Panorama (Default Tree):**
+  - Seperti drone yang terbang di atas hutan dan melihat seluruh ranting dan cabang pohon secara utuh dari atas. Ini adalah perspektif terbaik untuk perencana dan manajer toko.
+- **Lensa Buku Catatan (Tab Tabel):**
+  - Seperti saat petugas memeriksa daftar inventaris baris demi baris dengan penggaris. Ketika dibuka, meja kerja pencariannya (**Toolbar 1-Row Flex**) sudah ditata rapi sejajar agar penggaris dan pulpen tidak saling senggol!
+
+---
+
+## 🚀 60. Menjalankan Aplikasi Fullstack: Dua Mesin (Go Backend & SvelteKit Frontend)
+
+### 60.1 Anatomi Proyek: Dua Ekosistem Berbeda
+Proyek ERP Retail Modular ini menggabungkan dua ekosistem teknologi yang sangat berbeda:
+1. **Backend (Go):** Terletak di `/backend`, menggunakan `go run ./cmd/server/main.go`. Berjalan pada port `8088`.
+2. **Frontend (Node.js & SvelteKit Monorepo):** Terletak di `/frontend`, menggunakan NPM Workspaces (`apps/*`, `packages/*`). Berjalan pada port `5173`.
+
+### 60.2 Mengapa `npm run dev` di Root Awalnya Error?
+Ketika perintah `npm run dev` dijalankan langsung di direktori root utama (`/erp-retail-modular`), NPM mengeluarkan galat `ENOENT: no such file or directory, open '.../package.json'`.
+Hal ini terjadi karena secara default, NPM mencari file konfigurasi [package.json](file:///c:/PROJECT/WEBSITE/erp-retail-modular/package.json) tepat di direktori tempat perintah itu dipanggil. File konfigurasi frontend sebenarnya berada di dalam folder `/frontend/package.json`.
+
+### 60.3 Solusi Arsitektural: Root `package.json` Orchestrator
+Untuk mempermudah pengembang tanpa perlu selalu berpindah folder (`cd frontend`), kita menambahkan [package.json](file:///c:/PROJECT/WEBSITE/erp-retail-modular/package.json) di root level sebagai **Remote Control / Orkestrator Utama**:
+```json
+{
+  "name": "erp-retail-modular",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "dev:frontend": "npm --prefix frontend run dev:backoffice",
+    "dev:backend": "powershell -Command \"cd backend; go run ./cmd/server/main.go\"",
+    "build": "npm --prefix frontend run build:backoffice",
+    "lint": "npm --prefix frontend run lint",
+    "check": "npm --prefix frontend run --workspace=apps/backoffice check"
+  }
+}
+```
+
+- **Perintah Eksekusi:**
+  - `npm run dev` atau `npm run dev:frontend` -> Menjalankan Vite dev server untuk SvelteKit Backoffice (`http://localhost:5173`).
+  - `npm run dev:backend` -> Menjalankan server Go (`http://localhost:8088`).
+
+### 60.4 Analogi Dunia Nyata: "Dua Bangunan dalam Satu Kompleks (Pabrik Gudang vs Lobi Tamu)"
+- **Backend Go (Pabrik Mesin Berat):**
+  - Mesin diesel berkecepatan tinggi yang memproses jutaan instruksi per detik, menghitung stok, dan menjaga brankas database MySQL.
+- **Frontend SvelteKit (Lobi Tamu & Etalase Kaca):**
+  - Desain interior modern dengan palet monokrom Obsidian tempat resepsionis dan kasir berinteraksi dengan pengunjung toko.
+- **Root `package.json` (Saklar Pintu Gerbang Utama):**
+  - Seperti tombol saklar pusat di pos satpam depan gerbang kompleks. Satpam bisa langsung menekan tombol dari pos depan tanpa harus berjalan jauh masuk ke dalam lorong masing-masing gedung.
+
+---
+
+## 🌿 61. Anatomi Lengkap Frontend SvelteKit 5: Studi Kasus Master Kategori (Runes, Monorepo, & Component-First)
+
+### 61.1 Mengapa Studi Kasus Kategori Sangat Ideal?
+Kasus **Master Kategori** ([+page.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/routes/(app)/master/categories/+page.svelte)) adalah contoh terbaik untuk memahami seluruh spektrum frontend modern:
+1. **Tidak Terlalu Rumit:** Tidak memiliki alur mutasi stok bertahap atau otorisasi multi-level yang membingungkan.
+2. **Kaya Fitur Reaktif:** Memiliki pencarian instan (_instant search_), filter hierarki (induk vs sub-kategori), dua mode tampilan (Tabel & Pohon visual), formulir modal CRUD, dan dialog konfirmasi hapus yang aman.
+3. **Mencerminkan Arsitektur Monorepo:** Memperlihatkan bagaimana kode mengalir secara disiplin melintasi 3 package internal (`@erp/types`, `@erp/api-client`, `@erp/ui`) sebelum dirakit di halaman SvelteKit.
+
+---
+
+### 61.2 "Jalur Tol 4 Langkah" Arsitektur Monorepo
+
+Data kategori mengalir melewati 4 pos pemeriksaan terstruktur:
+
+```text
+[1. Backend Go REST API] 
+       ↓  (Kirim JSON via HTTP: GET /api/v1/inventory/categories)
+[2. @erp/types/inventory.ts]     -> "Kamus Bahasa Bersama" (Cetak Biru TypeScript)
+       ↓  (Diimpor oleh API Client)
+[3. @erp/api-client/inventory.ts] -> "Kurir Antar Paket" (Fungsi wrapper fetch)
+       ↓  (Dipanggil saat onMount & Submit Form)
+[4. master/categories/+page.svelte] -> "Meja Perakitan" (Menggabungkan Runes & Komponen @erp/ui)
+```
+
+1. **`@erp/types` ([inventory.ts](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/packages/types/src/inventory.ts)):**
+   - Mendefinisikan tipe `CategoryResponse`, `CreateCategoryRequest`, dan `UpdateCategoryRequest`.
+   - **Alasan Arsitektural:** Sumber kebenaran tunggal (*Single Source of Truth*). Jika ada perubahan kolom di backend, kita hanya perlu memperbarui satu file ini.
+2. **`@erp/api-client` ([inventory.ts](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/packages/api-client/src/inventory.ts)):**
+   - Berisi fungsi `listCategories(token)`, `createCategory(token, req)`, `updateCategory(token, id, req)`, dan `deleteCategory(token, id)`.
+   - **Alasan Arsitektural:** Halaman UI tidak boleh menyentuh `fetch()` mentah, URL endpoint, atau manipulasi `Authorization: Bearer <token>` secara acak.
+3. **`@erp/ui` ([COMPONENTS.md](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/packages/ui/COMPONENTS.md)):**
+   - Menyediakan komponen atomik siap pakai: `<Table>`, `<Modal>`, `<Button>`, `<Input>`, `<Select2>`, `<Badge>`, `<SearchInput>`, `<Alert>`, dan `<toast>`.
+   - **Alasan Arsitektural:** Konsistensi desain Obsidian Dark, kemudahan perawatan, dan mencegah duplikasi kode CSS.
+4. **Halaman Page ([+page.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/routes/(app)/master/categories/+page.svelte)):**
+   - Hanya bertugas mengelola **state reaktif** dan **tata letak**. Tidak menulis tag HTML mentah seperti `<button class="...">`.
+
+---
+
+### 61.3 Reaktivitas Modern: Svelte 5 Runes
+
+Di Svelte 5, konsep reaktivitas disederhanakan dan diperkuat dengan **Runes** (simbol dengan awalan `$`):
+
+#### 1. `$state` (Kotak Simpan Reaktif)
+Variabel yang jika nilainya diubah, layar tampilan otomatis ter-render ulang seketika.
+```typescript
+let categories = $state<CategoryResponse[]>([]);
+let loading = $state(true);
+let searchQuery = $state('');
+let activeTab = $state<'table' | 'tree'>('tree');
+```
+
+#### 2. `$derived` (Kalkulator Otomatis)
+Menghitung nilai baru secara otomatis berdasarkan perubahan variabel `$state`. Tidak perlu memanggil fungsi kalkulasi manual!
+```typescript
+// Otomatis terfilter setiap kali pengguna mengetik di searchQuery atau mengganti filter hierarki
+const filteredCategories = $derived(
+    categories.filter((cat) => {
+        const matchesSearch = cat.name.toLowerCase().includes(searchQuery.toLowerCase().trim());
+        const matchesHierarchy =
+            selectedHierarchyFilter === 'all' ||
+            (selectedHierarchyFilter === 'root' && !cat.parent_id) ||
+            (selectedHierarchyFilter === 'sub' && !!cat.parent_id);
+        return matchesSearch && matchesHierarchy;
+    })
+);
+
+// Statistik jumlah otomatis terbarui seketika
+const totalCategories = $derived(categories.length);
+const parentCategoriesCount = $derived(categories.filter((c) => !c.parent_id).length);
+```
+
+#### 3. `$derived.by` (Koki Peracik untuk Algoritma Kompleks)
+Jika perhitungannya butuh logika percabangan, loop, atau rekursi multi-baris (misal mengubah data flat database menjadi struktur pohon hierarki anak-cucu):
+```typescript
+const categoryTree = $derived.by((): CategoryTreeNode[] => {
+    // 1. Kelompokkan kategori berdasarkan parent_id
+    // 2. Temukan semua kategori tingkat akar (roots)
+    // 3. Bangun node anak secara rekursif (buildNode)
+    return roots.map((r) => buildNode(r, 1, new SvelteSet()));
+});
+```
+
+---
+
+### 61.4 Siklus Formulir Interaktif: Two-Way Binding (`bind:value`) & Modal
+
+Di React, membuat input form membutuhkan kode bertele-tele (`value={val} onChange={(e) => setVal(e.target.value)}`). Di Svelte, kita cukup menggunakan **Two-Way Binding**:
+
+```svelte
+<!-- Mengikat state formName secara bolak-balik dengan satu baris ringkas -->
+<Input label="Nama Kategori" bind:value={formName} placeholder="Contoh: Smartphone" required />
+```
+- Saat pengguna mengetik di layar, variabel `formName` di JavaScript langsung berubah.
+- Saat JavaScript mengubah `formName = ''` (reset form), teks di layar seketika terhapus!
+
+Untuk membuka/menutup modal, polanya sama:
+```svelte
+<Modal bind:open={showFormModal} title={isEditing ? 'Ubah Kategori' : 'Tambah Kategori'}>
+    <!-- Konten Form -->
+</Modal>
+```
+Cukup ubah `showFormModal = true` untuk membuka, dan tombol silang bawaan modal otomatis mengubahnya menjadi `false` saat diklik!
+
+---
+
+### 61.5 Type Narrowing Ketat pada Error Handling (Zero-Warning)
+
+Sesuai aturan arsitektur, `catch (err)` di TypeScript bertipe `unknown` (bukan `any`). Kita wajib melakukan penyempitan tipe (*Type Narrowing*):
+
+```typescript
+try {
+    const data = await listCategories(token);
+    categories = data;
+} catch (err: unknown) {
+    if (err instanceof ApiError) {
+        // Tipe disempitkan menjadi ApiError: aman membaca err.message dari server Go
+        error = err.message;
+    } else if (err instanceof Error) {
+        // Error bawaan JavaScript (misal: gagal koneksi jaringan)
+        error = err.message;
+    } else {
+        error = 'Gagal memuat data kategori';
+    }
+}
+```
+
+---
+
+### 61.6 Analogi Sederhana Dunia Nyata
+
+| Konsep Teknis | Analogi Dunia Nyata | Penjelasan Intuitif |
+| :--- | :--- | :--- |
+| **`$state`** | **Bahan Mentah di Meja Barista** (Biji kopi, susu cair, sirup) | Variabel dasar yang kita punya. Kita bisa menuang atau menggantinya kapan saja. |
+| **`$derived`** | **Secangkir Kopi Latte** | Begitu kamu mengganti susu sapi biasa dengan susu oat di meja (`$state`), rasa dan warna kopi di cangkir (`$derived`) langsung otomatis berubah tanpa kamu perlu menyeduh ulang dari nol! |
+| **`$derived.by`** | **Koki Spesialis Kue Pengantin** | Membuat kue bertingkat butuh susunan fondasi, olesan krim, dan hiasan bertahap (seperti algoritma rekursif membuat pohon hierarki kategori). |
+| **Two-Way Binding (`bind:value`)** | **Dua Cermin yang Berhadapan** | Gerakan apa pun yang kamu buat di depan cermin (UI) langsung memantul ke cermin di belakangnya (State JavaScript), dan sebaliknya. |
+| **Component-First (`@erp/ui`)** | **Pabrik Balok LEGO Standar Internasional** | Daripada melelehkan plastik mentah setiap kali mau membuat rumah, kamu cukup mengambil balok LEGO `Button` dan `Modal` yang sudah lolos uji presisi pabrik. |
+| **Pohon Kategori (Tree)** | **Bagan Silsilah Keluarga** | Dari daftar nama di kelurahan (flat list array), kita menyusun siapa kakek (Root), siapa ayah (Parent), dan siapa anak-cucu (Children). |
+
+---
+
+---
+
+## 🗺️ 62. Integrasi Titik Koordinat GPS & Leaflet MapPicker pada Master Cabang / Lokasi
+
+Membangun kapabilitas *Store Locator* untuk kebutuhan *Backoffice* kasir/admin dan *Storefront SSR* (ecommerce publik), sehingga pengunjung web di masa depan dapat melihat peta sebaran cabang fisik, memilih toko terdekat untuk pengambilan barang (*Click & Collect*), atau membuka rute navigasi.
+
+---
+
+### 62.1 Skema Database: Mengapa `DECIMAL(10,8)` & `DECIMAL(11,8)` Bukan `FLOAT`?
+
+Dalam dunia Sistem Informasi Geografis (GIS), Latitude berkisar dari `-90.0` sampai `+90.0` (maksimal 2 digit sebelum koma), sedangkan Longitude berkisar dari `-180.0` sampai `+180.0` (maksimal 3 digit sebelum koma).
+
+```sql
+ALTER TABLE inv_locations
+    ADD COLUMN latitude DECIMAL(10, 8) NULL DEFAULT NULL AFTER address,
+    ADD COLUMN longitude DECIMAL(11, 8) NULL DEFAULT NULL AFTER latitude;
+```
+
+#### Mengapa tidak menggunakan tipe `FLOAT` atau `DOUBLE` biasa?
+1. **Ketepatan Eksak vs Floating Point Drift:**
+   Tipe data `FLOAT` berbasis biner IEEE 754 dan rentan mengalami pergeseran presisi tak kasat mata (contoh: angka `-6.17539200` bisa tersimpan sebagai `-6.175391999824`).
+2. **Presisi 8 Desimal:**
+   Pada ekuator bumi:
+   - 4 angka desimal = akurasi ~11 meter (skala blok jalan).
+   - 6 angka desimal = akurasi ~0.11 meter (skala pintu masuk toko).
+   - 8 angka desimal = akurasi ~1.1 milimeter (skala posisi meja kasir toko secara absolut).
+   Dengan `DECIMAL(10,8)` dan `DECIMAL(11,8)`, kita mendapatkan presisi tingkat milimeter tanpa ada pembulatan liar dari mesin biner.
+
+---
+
+### 62.2 Layer Domain DDD: Validasi Geodetik & Aturan "All-or-Nothing"
+
+Di dalam `backend/internal/modules/inventory/domain/location.go`, koordinat disimpan sebagai pointer (`*float64`) agar dapat bernilai `nil` bagi gudang virtual atau toko online yang tidak memiliki koordinat fisik:
+
+```go
+func validateCoordinates(lat, lng *float64) error {
+    // 1. Aturan All-or-Nothing: Keduanya harus ada, atau keduanya harus nil
+    if (lat != nil && lng == nil) || (lat == nil && lng != nil) {
+        return ErrInvalidCoordinates
+    }
+    if lat == nil || lng == nil {
+        return nil
+    }
+
+    // 2. Batas Geodetik Latitude (-90 s/d +90)
+    if *lat < -90.0 || *lat > 90.0 {
+        return ErrInvalidLatitude
+    }
+
+    // 3. Batas Geodetik Longitude (-180 s/d +180)
+    if *lng < -180.0 || *lng > 180.0 {
+        return ErrInvalidLongitude
+    }
+
+    return nil
+}
+```
+
+- **Invarian Bisnis:** Data koordinat tidak boleh pincang (misal hanya mengisi Latitude tanpa Longitude).
+- **Nil Safety:** Penggunaan `sql.NullFloat64` di layer *Infrastructure* (`location_repository.go`) memastikan konversi yang aman antara SQL `NULL` dan Go pointer tanpa panic.
+
+---
+
+### 62.3 Pemetaan Web Bebas Biaya: Leaflet + OpenStreetMap + Nominatim
+
+Banyak pengembang terjebak menggunakan Google Maps API yang mewajibkan pendaftaran kartu kredit, konfigurasi API Key kompleks, dan risiko tagihan tak terduga jika situs ramai pengunjung.
+
+Pada proyek ini, kita menggunakan ekosistem **Open Source Modern**:
+1. **Leaflet JS:** Pustaka visualisasi peta interaktif yang sangat ringan (<40 KB) dan cepat.
+2. **OpenStreetMap Standard Tiles:** Tile peta dunia gratis dari komunitas global tanpa perlu registrasi API Key (`https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`).
+3. **Nominatim Search API:** Layanan geocoding gratis OpenStreetMap untuk mencari koordinat berdasarkan nama daerah/kota/jalan (`https://nominatim.openstreetmap.org/search?q=...&format=json`).
+
+#### Trik Arsitektur: Menghindari Crash SvelteKit SSR
+Pustaka peta seperti Leaflet mengandalkan objek browser global (`window` dan `document`). Jika di-`import` langsung di server Node.js pada saat SSR (*Server-Side Rendering*), aplikasi akan langsung *crash* dengan error `window is not defined`.
+
+Solusi elegan pada `MapPicker.svelte`:
+```typescript
+onMount(() => {
+    // Dipanggil hanya saat komponen terpasang di browser klien (Client-Side)
+    loadLeaflet().then(() => {
+        initMap();
+    });
+});
+```
+File script dan stylesheet CSS Leaflet diinjeksi secara dinamis ke tag `<head>` hanya ketika browser siap, menjamin 100% kompatibel baik di mode SSR maupun SPA.
+
+---
+
+### 62.4 Reusable Component Governance: `@erp/ui/MapPicker.svelte`
+
+Sesuai prinsip **Component-First**, kita membangun satu komponen terpusat di `@erp/ui` yang memiliki fitur lengkap:
+1. **Klik & Geser (*Draggable Pin*):** Menggeser penanda merah otomatis memperbarui angka Latitude & Longitude.
+2. **Pencarian Alamat (*Geocoding Search*):** Pengguna cukup mengetik nama jalan/kota (misal: "Dago Bandung"), lalu memilih dari dropdown saran.
+3. **Tombol "Lokasi Saya" (*HTML5 Geolocation*):** Memanfaatkan sensor GPS gawai pengguna untuk langsung mengarahkan pin ke lokasi saat ini.
+4. **Input Manual Langsung:** Admin dapat langsung menempelkan (*paste*) angka koordinat dari Google Maps atau dokumen perizinan toko.
+5. **Mode Pratinjau (*Readonly*):** Ketika dibuka di tabel master cabang, tombol pencarian dan penggeser pin dinonaktifkan sehingga hanya menampilkan lokasi toko beserta tombol jalan pintas ke Google Maps resmi.
+
+---
+
+### 62.5 Analogi Sederhana Dunia Nyata
+
+| Konsep Teknis | Analogi Dunia Nyata | Penjelasan Intuitif |
+| :--- | :--- | :--- |
+| **`DECIMAL(10,8)` vs `FLOAT`** | **Patok Beton BPN vs Garis Kapur Tulis di Aspal** | Garis kapur (`FLOAT`) bisa luntur atau tergeser beberapa mili karena hembusan angin. Patok beton BPN (`DECIMAL`) ditancapkan ke tanah bumi secara permanen dan tidak akan pernah bergeser satu milimeter pun. |
+| **Leaflet + OpenStreetMap** | **Atlas Peta Terbuka Perpustakaan Kota** | Buku peta umum yang bebas dibaca siapa saja tanpa biaya langganan, berbeda dengan layanan peta komersial yang setiap membuka halamannya harus menggesek kartu kredit. |
+| **Geocoding Nominatim** | **Petugas Kantor Pos Senior** | Kamu menyebut nama tempat: *"Toko Dago, Bandung"*, lalu petugas pos langsung membuka buku induk kode pos dan menyebutkan koordinat lintang serta bujur gedung tersebut. |
+| **`validateCoordinates` (All-or-Nothing)** | **Sepasang Sepatu Kiri dan Kanan** | Kamu tidak boleh keluar rumah hanya memakai sepatu kiri (Latitude) tanpa sepatu kanan (Longitude). Entah kamu memakai keduanya, atau bertelanjang kaki (nil). |
+| **MapPicker Drag & Drop Pin** | **Menancapkan Bendera Merah di Meja Maket Arsitek** | Daripada pusing menebak koordinat di kertas, kamu cukup mengambil bendera kecil lalu menancapkannya tepat di atas atap ruko pada maket miniatur gedung. |
+| **Dynamic Script Injection** | **Menyalakan Proyektor Bioskop Hanya Setelah Layar Diturunkan** | Menghindari error server: jangan putar film (Leaflet) jika bioskop masih dalam tahap konstruksi pondasi (SSR server), tunggu sampai ruangan siap dan penonton sudah duduk di kursi (Browser `onMount`). |
+
+---
+
+## 🏢 63. Arsitektur Tampilan Tabel Backoffice: Dari Root Layout Hingga Komponen Table Reusable
+
+### 63.1 Struktur Bertingkat (_Russian Doll Layout_) di `apps/backoffice`
+Sebelum sebuah tabel tampil di layar, SvelteKit merakit halaman melalui **3 lapis pembungkus bersarang**:
+
+```text
+1. Root Layout (src/routes/+layout.svelte)
+   └── Cek Autentikasi Global, ToastContainer, Layar Loading Awal
+       └── 2. App Shell Layout (src/routes/(app)/+layout.svelte)
+           └── Sidebar Navigasi Vertikal + Topbar Header + Area Main Scrollable
+               └── 3. Halaman Page (src/routes/(app)/master/categories/+page.svelte)
+                   └── Toolbar (SearchInput + Select2) + <Table> Reusable
+```
+
+- **Level 1 — Root Layout (`+layout.svelte`):**
+  - Berperan sebagai **Gerbang Masuk & Pos Satpam**.
+  - Mengeksekusi `await initAuth()` saat aplikasi dimuat pertama kali. Jika sesi belum siap, menampilkan layar *"Memuat sistem..."*.
+  - Menyediakan `<ToastContainer />` agar notifikasi melayang dapat dipanggil dari halaman mana pun.
+- **Level 2 — App Shell Layout (`(app)/+layout.svelte`):**
+  - Berperan sebagai **Denah Gedung Kantor**.
+  - Mengelola `<Sidebar>` (bisa di-minimize/collapse atau dibuka via drawer di HP) dan `<Topbar>` (profil user, tombol logout).
+  - Elemen `<main>` memiliki kelas Tailwind `flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8`, memastikan area konten tabel bisa di-scroll secara independen tanpa membuat seluruh jendela browser bergoyang.
+- **Level 3 — Page (`master/categories/+page.svelte`):**
+  - Berperan sebagai **Ruang Kerja Meja Kategori**.
+  - Di sinilah komponen data tabel diletakkan bersama filter dan tombol aksi.
+
+---
+
+### 63.2 Anatomi Komponen `<Table>` Reusable (`@erp/ui`)
+
+Di `@erp/ui/components/Table.svelte`, tabel bukanlah sekadar tag `<table>` biasa. Komponen ini adalah wadah pintar yang menangani **3 kondisi visual utama**:
+
+1. **State Loading (`loading = true`):**
+   - Menampilkan animasi spinner SVG modern dan teks *"Memuat data..."*.
+2. **State Kosong (`empty = true`):**
+   - Menampilkan ikon Heroicons (dokumen kosong), judul bersahabat (`emptyTitle`), dan instruksi aksi bagi pengguna (`emptyMessage`).
+3. **State Berisi Data:**
+   - Membungkus tabel dengan `overflow-x-auto` (mencegah tabel pecah/rusak di layar sempit/HP).
+   - Menggunakan fitur Svelte 5 **`{@render children()}`** untuk merender baris `<thead>` dan `<tbody>`.
+
+```svelte
+<!-- Penggunaan di master/categories/+page.svelte -->
+<Table
+    empty={!loading && filteredCategories.length === 0}
+    emptyTitle="Belum Ada Kategori"
+    emptyMessage={searchQuery
+        ? 'Tidak ada kategori yang cocok dengan pencarian Anda.'
+        : 'Silakan klik tombol Tambah Kategori untuk membuat kategori produk pertama.'}
+    {loading}
+>
+    <thead>
+        <tr class="border-b border-neutral-200 bg-neutral-50 text-[11px] font-bold tracking-wider text-neutral-500 uppercase">
+            <th class="px-4 py-3">Nama Kategori</th>
+            <th class="px-4 py-3">Tipe / Hierarki</th>
+            <th class="px-4 py-3">Kategori Induk</th>
+            <th class="hidden px-4 py-3 md:table-cell">ID Kategori</th>
+            <th class="hidden px-4 py-3 sm:table-cell">Diperbarui</th>
+            <th class="px-4 py-3 text-right">Aksi</th>
+        </tr>
+    </thead>
+    <tbody class="divide-y divide-neutral-100">
+        {#each filteredCategories as category (category.id)}
+            <!-- Baris data -->
+        {/each}
+    </tbody>
+</Table>
+```
+
+---
+
+### 63.3 Konsep Kunci Svelte pada Baris Tabel: Keyed Loop `(category.id)`
+
+Perhatikan sintaks perulangan data:
+```svelte
+{#each filteredCategories as category (category.id)}
+```
+Bagian `(category.id)` di dalam tanda kurung disebut **Keyed Each**.
+- **Tanpa Key `(category.id)`:** Saat satu kategori dihapus dari tengah tabel, Svelte terpaksa merender ulang semua baris di bawahnya karena tidak tahu baris mana yang sebenarnya hilang.
+- **Dengan Key `(category.id)`:** Svelte mengikat elemen DOM fisik secara 1:1 ke ID unik UUIDv7 kategori tersebut. Saat ada baris dihapus atau urutan diubah, Svelte hanya memindahkan/menghapus node DOM yang bersangkutan secara instan. Ini memberikan performa render maksimal!
+
+---
+
+### 63.4 Kolom Responsif Cerdas dengan Tailwind CSS
+
+Tabel di backoffice sering kali memiliki banyak kolom (Nama, Tipe, Induk, ID, Tanggal, Aksi). Agar tidak berantakan di layar ponsel:
+- **`hidden md:table-cell`:** Kolom "ID Kategori" disembunyikan di layar HP dan tablet kecil, baru dimunculkan di layar komputer (lebar $\ge 768\text{px}$).
+- **`hidden sm:table-cell`:** Kolom "Diperbarui" baru dimunculkan pada lebar $\ge 640\text{px}$.
+- Kolom penting seperti **Nama Kategori**, **Tipe**, dan **Tombol Aksi** tetap selalu tampil di semua ukuran layar!
+
+---
+
+### 63.5 Analogi Sederhana Dunia Nyata
+
+| Komponen Arsitektur | Analogi Dunia Nyata | Penjelasan Intuitif |
+| :--- | :--- | :--- |
+| **Root Layout (`+layout.svelte`)** | **Pintu Gerbang & Pos Satpam Gedung** | Satpam memeriksa tanda pengenal (Auth) tamu sebelum diizinkan masuk ke dalam lift gedung kantor. |
+| **App Layout (`(app)/+layout.svelte`)** | **Denah Lantai Kantor (Koridor & Meja Informasi)** | Menyediakan lorong jalan (Sidebar) dan papan informasi (Topbar) agar staf bisa menuju ke ruangan masing-masing. |
+| **Halaman Page (`+page.svelte`)** | **Ruang Kerja Spesifik (Departemen Kategori)** | Ruangan kerja tempat staf membuka berkas lemari arsip kategori. |
+| **Komponen `<Table>` Reusable** | **Etalase Kaca Toko yang Fleksibel** | Jika barang masih dibongkar: pasang tanda *"Sedang Menata Barang"* (Loading). Jika kosong: pasang papan *"Stok Kosong"* (Empty State). Jika ada: tata rapi di rak kaca. |
+| **Keyed Each `(category.id)`** | **Nomor Tag Koper di Bagasi Bandara** | Memastikan petugas bagasi langsung mengambil koper yang tepat tanpa harus memeriksa dan membongkar ulang seluruh tumpukan koper lainnya. |
+
+---
+
+---
+
+## 📦 64. Manajemen Persediaan Stok Cabang, Stock Opname, dan Invariant Row-Level Locking (`SELECT ... FOR UPDATE`)
+
+Dalam operasional bisnis retail modern, salah satu masalah paling fatal adalah **ketidaksesuaian persediaan**: sistem kasir mencatat ada 10 unit barang, namun saat dicari di rak gudang fisiknya sudah kosong atau hilang (selisih stok).
+
+Modul Inventaris menangani hal ini melalui arsitektur persediaan terisolasi per cabang (`inv_stocks`), fitur **Stock Opname**, dan penguncian transaksi atomik (*Pessimistic Locking*).
+
+---
+
+### 64.1 Anatomi Persediaan: Tiga Dimensi Kuantitas Barang
+
+Di dalam database dan entity domain `backend/internal/modules/inventory/domain/stock.go`, stok tidak hanya dicatat sebagai satu angka "stok", melainkan dipisah menjadi **3 dimensi kuantitas**:
+
+```text
+┌────────────────────────────────────────────────────────┐
+│             Stok Fisik Nyata (Quantity)                │  <- Seluruh dus barang di rak gudang
+├────────────────────────────┬───────────────────────────┤
+│ Stok Siap Jual (Available) │ Stok Dipesan (Reserved)   │
+│ (Bebas ditransaksikan)     │ (Terkunci untuk mutasi/PO)│
+└────────────────────────────┴───────────────────────────┘
+```
+
+1. **`Quantity` (Stok Fisik):**
+   Jumlah total barang nyata yang ada di atas rak dan lantai gudang cabang.
+2. **`ReservedQuantity` (Stok Dipesan / Dibooking):**
+   Jumlah barang yang secara fisik masih ada di rak toko, tetapi **sudah dialokasikan** untuk pesanan pelanggan yang belum diambil atau mutasi antar-cabang yang sedang disetujui.
+3. **`AvailableQuantity` (Stok Bebas / Siap Jual):**
+   ```go
+   AvailableQuantity = Quantity - ReservedQuantity
+   ```
+   Hanya angka inilah yang boleh ditampilkan di kasir POS toko atau storefront ecommerce. Kasir dilarang keras menjual barang yang sedang direservasi!
+
+---
+
+### 64.2 Invarian Bisnis Domain: Mencegah Pelanggaran Saldo
+
+Domain DDD menjamin aturan integritas bisnis berikut:
+
+```go
+func (s *StockItem) AdjustQuantity(newQty int) error {
+    if newQty < 0 {
+        return ErrNegativeQuantity
+    }
+    // Invarian Kunci: Kuantitas fisik baru tidak boleh lebih kecil dari reservasi aktif!
+    if newQty < s.ReservedQuantity {
+        return fmt.Errorf("%w: kuantitas baru (%d) lebih kecil dari reservasi aktif (%d)",
+            ErrReservedExceedsStock, newQty, s.ReservedQuantity)
+    }
+
+    s.Quantity = newQty
+    s.UpdatedAt = time.Now().UTC()
+    return nil
+}
+```
+
+- **Pencegahan Overselling:** Petugas tidak diizinkan mengubah stok menjadi 1 unit jika ada 2 unit barang yang sudah di-booking oleh permohonan transfer stok atau order aktif.
+
+---
+
+### 64.3 Mengapa Menggunakan `SELECT ... FOR UPDATE` (Pessimistic Locking)?
+
+Di toko retail yang ramai, bayangkan situasi berikut:
+- **09:00:00:** Kasir A menjual produk terakhir (Stok = 1).
+- **09:00:00:** Kasir B di meja sebelah juga menekan tombol bayar untuk produk yang sama.
+- Tanpa penguncian database (*Race Condition*), kedua kasir membaca `Stok = 1`, keduanya memotong stok menjadi 0, dan toko mengalami kondisi **stok minus (-1)** atau barang tidak ada saat diserahkan ke pembeli.
+
+#### Solusi Arsitektur: `AtomicMutate` di `stock_repository.go`
+```sql
+SELECT id, product_id, location_id, quantity, reserved_quantity, min_stock, updated_at
+FROM inv_stocks
+WHERE product_id = ? AND location_id = ?
+FOR UPDATE
+```
+
+- Klausa **`FOR UPDATE`** memerintahkan MySQL untuk **mengunci baris data produk di cabang tersebut**.
+- Transaksi kedua akan antre secara sopan di belakang transaksi pertama sampai transaksi pertama di-*commit*.
+- Pola *Closure Callback* di Go memastikan koneksi transaksi dan rollback ditangani secara otomatis di layer *Infrastructure*, sementara aturan bisnis murni tetap tinggal di *Domain*.
+
+---
+
+### 64.4 SvelteKit 5 Runes: `$derived.by` untuk Enriched Stocks & Live Diff
+
+Di halaman `frontend/apps/backoffice/src/routes/(app)/inventory/stocks/+page.svelte`, data katalog master produk digabungkan dengan saldo stok cabang menggunakan Svelte 5 **`$derived.by`**:
+
+```typescript
+const enrichedStocks = $derived.by<EnrichedStock[]>(() => {
+    const stockMap = new Map<string, StockResponse>();
+    for (const s of stocks) {
+        stockMap.set(s.product_id, s);
+    }
+
+    return products.map((prod) => {
+        const st = stockMap.get(prod.id);
+        const qty = st ? st.quantity : 0;
+        const rsv = st ? st.reserved_quantity : 0;
+        return {
+            productId: prod.id,
+            productName: prod.name,
+            productSku: prod.sku,
+            quantity: qty,
+            reservedQuantity: rsv,
+            availableQuantity: Math.max(0, qty - rsv),
+            ...
+        };
+    });
+});
+```
+
+#### Kalkulasi Selisih Stok Seketika (*Live Dynamic Diff*):
+Pada modal Stock Opname, ketika admin mengetik angka fisik baru:
+- Jika kuantitas naik (misal dari 27 ke 30): Tampil badge hijau `+3 unit (Bertambah)`.
+- Jika kuantitas turun (misal dari 27 ke 20): Tampil badge merah `-7 unit (Berkurang)`.
+Perhitungan ini berjalan di memori browser secara reaktif dalam waktu kurang dari 1 milidetik!
+
+---
+
+### 64.5 Analogi Sederhana Dunia Nyata
+
+| Konsep Teknis | Analogi Dunia Nyata | Penjelasan Intuitif |
+| :--- | :--- | :--- |
+| **`Quantity` (Stok Fisik)** | **Seluruh Dus HP di Lemari Kaca Toko** | Total semua dus HP yang tampak nyata oleh mata kita di dalam lemari etalase. |
+| **`ReservedQuantity`** | **Dus HP yang Diberi Stiker "Milik Pelanggan A (Sudah Dibayar)"** | Dus barang masih diletakkan di lemari, tapi sudah ada yang punya. Siapa pun tidak boleh mengambilnya. |
+| **`AvailableQuantity`** | **Dus HP yang Bebas Dijual ke Pembeli Baru** | Sisa dus yang belum ditempeli stiker pesanan siapapun. |
+| **`SELECT ... FOR UPDATE`** | **Gembok Lemari Etalase Saat Kasir Mengambil Barang** | Kasir A memegang kunci gembok lemari. Kasir B harus menunggu kasir A selesai mengambil barang dan mengunci lemari kembali, mencegah rebutan barang yang sama. |
+| **Stock Opname** | **Sensus Penduduk Barang Mingguan** | Petugas menghitung satu per satu barang nyata dengan mencocokkan buku catatan gudang untuk mendeteksi barang rusak, pecah, atau hilang. |
+| **`min_stock`** | **Lampu Kuning Indikator Bensin di Dashboard Mobil** | Bensin mobil belum habis total, tetapi indikator berkedip mengingatkan supir untuk segera mampir ke SPBU (reorder barang ke supplier). |
+
+---
+
+---
+
+## 🚚 65. Mutasi Stok Antar Cabang: Siklus State Machine & Invarian Alokasi Saldo
+
+Ketika sebuah jaringan retail memiliki banyak cabang fisik (misal: Toko Jakarta, Toko Surabaya, Toko Bandung), barang dagangan sering kali harus dipindahkan dari gudang pusat ke cabang atau antar toko untuk memenuhi permintaan pasar lokal (*Inter-Branch Stock Transfer*).
+
+Jika mutasi stok hanya dicatat sebagai teks biasa atau sekadar update instan angka database, bisnis akan menghadapi bahaya **selisih barang hilang di jalan (*in-transit shrinkage*)** dan penjualan ganda sebelum barang sempat dikirim.
+
+---
+
+### 65.1 State Machine Alur Mutasi (4-Step Status Lifecycle)
+
+Modul Inventaris menerapkan mesin status (*State Machine*) yang ketat pada entity `StockTransfer`:
+
+```text
+ ┌──────────────────────┐
+ │   pending_approval   │  -> Permohonan dibuat oleh staf cabang.
+ └──────────┬───────────┘     Stok cabang asal langsung DIBOOKING (ReservedQuantity++).
+            │
+      ┌─────┴────────────────┐
+      ▼                      ▼
+┌───────────┐          ┌───────────┐
+│ approved  │          │ rejected  │ -> Ditolak oleh Owner/Superadmin.
+└─────┬─────┘          └───────────┘    Cadangan dilepaskan (ReservedQuantity--).
+      │                                 Stok asal kembali siap dijual.
+      ▼
+┌───────────┐
+│in_transit │ -> Armada ekspedisi berangkat (Ship).
+└─────┬─────┘    Stok fisik cabang asal RESMI DIPOTONG (Quantity--, ReservedQuantity--).
+      │          Barang berpindah ke tanggung jawab kurir pengiriman.
+      ▼
+┌───────────┐
+│ received  │ -> Barang tiba di cabang tujuan & diperiksa (Receive).
+└───────────┘    Stok fisik cabang tujuan RESMI BERTAMBAH (Quantity++).
+```
+
+#### Aturan Transisi Status yang Tidak Boleh Dilanggar:
+- Tidak boleh langsung `received` tanpa melalui `in_transit` (barang tidak bisa teleportasi).
+- Tidak boleh `ship` tanpa persetujuan `approved` dari pimpinan/owner.
+- Jika ditolak (`rejected`), pemohon wajib menyertakan alasan penolakan (`rejection_reason`) untuk akuntabilitas.
+
+---
+
+### 65.2 Dampak Transaksi Terhadap Saldo Stok per Langkah
+
+| Tahap Lifecycle | Dampak di Cabang Asal | Dampak di Cabang Tujuan | Penjelasan Bisnis |
+| :--- | :--- | :--- | :--- |
+| **1. `pending_approval`** | `ReservedQuantity += Qty`<br>`Available -= Qty` | *(Tidak ada perubahan)* | Barang fisik masih ada di rak asal, tetapi sudah terkunci dan kasir asal tidak bisa menjualnya. |
+| **2. `approved`** | *(Tetap dicadangkan)* | *(Tidak ada perubahan)* | Disetujui pimpinan, staf gudang mulai mempacking dus barang ke palet. |
+| **3. `rejected`** | `ReservedQuantity -= Qty`<br>`Available += Qty` | *(Tidak ada perubahan)* | Permohonan dibatalkan, kunci booking dilepas, kasir asal boleh menjualnya lagi. |
+| **4. `in_transit`** | `Quantity -= Qty`<br>`ReservedQuantity -= Qty` | *(Tidak ada perubahan)* | Truk berangkat. Barang resmi keluar dari neraca fisik gudang asal. |
+| **5. `received`** | *(Sudah dipotong)* | `Quantity += Qty`<br>`Available += Qty` | Truk dibongkar, barang dihitung, saldo fisik cabang tujuan bertambah. |
+
+---
+
+### 65.3 Integrasi Nomor Seri (Serial / IMEI Tracking)
+
+Untuk produk elektronik bernomor seri (misal: iPhone, Laptop):
+- Pada saat permohonan mutasi, admin memilih unit serial spesifik.
+- Status unit serial berubah menjadi `reserved` di cabang asal.
+- Saat status mencapai `received` di cabang tujuan, lokasi unit serial (`location_id` pada tabel `inv_serial_units`) secara otomatis dialihkan ke cabang tujuan, menjamin garansi dan riwayat unit tetap akurat.
+
+---
+
+### 65.4 Implementasi Frontend di Backoffice (`/inventory/transfers`)
+
+1. **Multi-Item Transfer Builder:**
+   - Dropdown cerdas `Select2` yang secara real-time menampilkan sisa stok siap jual di cabang asal untuk produk yang dipilih.
+   - Validasi ketat di browser mencegah admin memasukkan kuantitas transfer melebihi stok yang tersedia di cabang asal.
+2. **Kartu Statistik KPI:**
+   - Memberikan visibilitas langsung terhadap berapa banyak permohonan yang antre persetujuan, barang yang sedang ada di jalan, dan total barang yang telah sampai.
+3. **Surat Jalan Digital (Detail Modal):**
+   - Menampilkan **4-Step Status Timeline Stepper** (*1. Diajukan* ➔ *2. Disetujui* ➔ *3. Dalam Ekspedisi* ➔ *4. Diterima Lengkap*).
+   - Menampilkan jejak audit lengkap (*Audit Trail*): siapa staf yang mengajukan (`requested_by`), pimpinan yang menyetujui (`approved_by`), dan petugas gudang penerima (`received_by`).
+
+---
+
+### 65.5 Analogi Sederhana Dunia Nyata
+
+| Konsep Teknis | Analogi Dunia Nyata | Penjelasan Intuitif |
+| :--- | :--- | :--- |
+| **`pending_approval`** | **Pita Kuning Pembatas di Dus Barang Gudang** | Staf menempelkan pita kuning bertuliskan *"Barang ini akan dikirim ke Cabang Surabaya, jangan dijual!"*. Dus barang belum pergi, tetapi sudah dikarantina. |
+| **`approved`** | **Tanda Tangan Surat Perintah Jalan oleh Kepala Gudang** | Pimpinan memeriksa apakah cabang asal memang punya surplus stok dan cabang tujuan memang kekurangan barang. |
+| **`rejected`** | **Gunting Pita Kuning & Kembalikan ke Rak Penjualan** | Jika transfer dibatalkan, staf melepas pita kuning dan barang kembali ditaruh di rak pajangan kasir. |
+| **`in_transit`** | **Pintu Belakang Truk Boks Dikunci Gembok & Berangkat** | Dus barang sudah diangkat ke dalam truk. Barang resmi keluar dari toko asal dan menjadi tanggung jawab sopir armada. |
+| **`received`** | **Tanda Tangan Berita Acara Serah Terima di Toko Tujuan** | Petugas toko penerima membuka pintu truk, menghitung jumlah dus, dan menata barang ke rak toko mereka. |
+
+---
+
+## 📱 66. Pelacakan Serial Number & IMEI Unit Fisik: Bounded Context, Fast Barcode Scanner, dan Siklus Hidup Terproteksi
+
+Dalam industri ritel elektronik dan gadget bernilai tinggi (seperti *iPhone, smartphone Android, laptop gaming, kulkas, smart TV*), mencatat kuantitas stok agregat saja (misal: "tersedia 10 unit") tidaklah cukup. Toko ritel wajib mampu membedakan unit fisik yang satu dari unit fisik yang lain secara presisi. Modul **Serial Number & IMEI Tracking** (`inv_serial_units`) hadir untuk menjawab kebutuhan ini.
+
+---
+
+### 66.1 Stok Agregat (`inv_stocks`) vs Unit Fisik Individu (`inv_serial_units`)
+
+| Aspek Pembeda | Stok Agregat (`inv_stocks`) | Unit Fisik Berserial (`inv_serial_units`) |
+| :--- | :--- | :--- |
+| **Konsep Utama** | *Counter* kuantitas saldo barang di cabang tertentu (misal: 25 unit). | Entitas fisik spesifik beridentitas unik global (1 unit = 1 baris). |
+| **Identitas Utama** | Pasangan `(product_id, location_id)`. | **UUIDv7** & **Nomor Seri / IMEI Unik Pabrik** (`serial_number`). |
+| **Target Barang** | Barang generik/komoditas (kabel data, baterai, pelindung layar, flashdisk). | Barang bernilai tinggi / bergaransi resmi pabrik (HP, laptop, TV, kulkas). |
+| **Operasional Kasir** | Scan barcode produk biasa $\rightarrow$ kurangi kuantitas stok $-1$. | Scan barcode SKU produk $\rightarrow$ **wajib scan barcode nomor seri/IMEI fisik** pada dus barang. |
+| **Klaim Garansi & Retur**| Sulit memvalidasi apakah barang dibeli di toko kita atau toko lain. | Sangat presisi: sistem mencatat riwayat kapan unit terjual, di cabang mana, dan batas garansi resminya. |
+
+---
+
+### 66.2 Domain Invariants Kunci Serial Unit
+
+Di layer domain Go (`internal/modules/inventory/domain/serial_unit.go`), aturan bisnis diproteksi dengan ketat (*Domain Invariants*):
+
+1. **Flag Serial Tracking Wajib Aktif:**
+   Unit serial **hanya dapat didaftarkan** jika produk induknya memiliki `flag_serial_tracking = TRUE`. Barang generik seperti kabel atau baut akan ditolak jika dicoba didaftarkan nomor serinya (`ErrProductNotTrackedBySerial`).
+2. **Keunikan Global Nomor Seri:**
+   Tidak boleh ada dua unit fisik di seluruh sistem (bahkan di cabang berbeda) yang memiliki `serial_number` yang sama (`ErrDuplicateSerialNumber`).
+3. **Siklus Hidup Terproteksi (State Machine):**
+   - **`tersedia` (Available):** Unit berada di rak toko atau gudang cabang, siap dijual atau dimutasi.
+   - **`terjual` (Sold):** Unit telah diserahkan ke pelanggan melalui transaksi POS. Unit yang berstatus terjual tidak boleh dijual kembali ganda.
+   - **`retur` (Returned):** Unit dikembalikan oleh konsumen karena cacat pabrik atau klaim garansi. Hanya unit berstatus `terjual` yang boleh diretur (`ErrSerialNotSold`).
+   - **Restock / Servis Selesai:** Unit retur yang telah diperbaiki atau disetujui untuk dijual kembali dapat dikembalikan statusnya menjadi `tersedia` (`MarkAsAvailable()`).
+4. **Mutasi Antar Cabang Berbasis Serial:**
+   Hanya unit yang berstatus `tersedia` di cabang asal yang boleh dipindahkan ke cabang lain (`TransferLocation()`).
+
+---
+
+### 66.3 Arsitektur Fast Barcode Scanner & Instant Lookup
+
+Kasir POS dan petugas layanan pelanggan (*customer service*) membutuhkan verifikasi nomor seri dalam hitungan milidetik saat melayani antrean:
+
+1. **Fast Lookup via Single Query:**
+   Endpoint `GET /api/v1/inventory/serials/lookup?sn=...` memanfaatkan index unik database (`idx_inv_serial_units_sn`) sehingga pencarian nomor seri berlangsung instan (< 5 ms).
+2. **Metadata Enrichment Tanpa N+1 Query:**
+   Application use case `LookupSerialNumberUseCase` secara otomatis melengkapi data nomor seri dengan nama produk, SKU, brand, nama cabang, dan kode lokasi sehingga kasir langsung melihat informasi lengkap di layar monitor.
+3. **Batch Scanner Registration:**
+   Saat barang datang dari pabrik (1 palet berisi 50 unit), petugas gudang menggunakan scanner laser barcode. Input textarea di Backoffice secara otomatis mendeteksi baris baru (*multi-line input*), menghitung total unit valid secara real-time, dan memperingatkan jika ada nomor seri yang ter-scan ganda (*duplicate detection*).
+
+---
+
+### 66.4 Implementasi Frontend Modern di Backoffice (`/inventory/serials`)
+
+1. **Obsidian Laser Scanner Card:**
+   - Desain kontras tinggi bernuansa Obsidian gelap dengan form input yang siap menerima ketikan scanner barcode berkecepatan tinggi.
+   - Dilengkapi tombol *clear* dan kartu hasil pindaian dinamis (*Hasil Pindai Fisik*).
+2. **Sinkronisasi Reaktif Tanpa Reload Halaman (Svelte 5 Runes):**
+   - Saat status serial diubah dari `Tersedia` menjadi `Terjual` via modal, state lokal reaktif langsung mengkalkulasi ulang (*derived computation*) seluruh kartu KPI (`kpiMetrics`) dan tombol filter status tanpa perlu melakukan *refresh* halaman.
+3. **Batch Modal dengan Live Counter:**
+   - Textarea cerdas yang mem-parsing input scanner secara dinamis dan mengubah label tombol simpan (*"Daftarkan 3 Unit"*).
+
+---
+
+### 66.5 Analogi Sederhana Dunia Nyata
+
+| Konsep Teknis | Analogi Dunia Nyata | Penjelasan Intuitif |
+| :--- | :--- | :--- |
+| **`inv_stocks` (Stok Kuantitas)** | **Manifes Tiket Pesawat Rombongan** | Catatan maskapai bahwa ada *"150 kursi terisi di penerbangan Jakarta-Surabaya"*. Mengetahui jumlah total, tetapi tidak tahu nama spesifik setiap orang. |
+| **`inv_serial_units` (Serial Unit)** | **Buku Paspor Imigrasi Individu** | Dokumen beridentitas resmi milik satu orang spesifik. Memiliki nomor paspor unik, nama pemilik, riwayat stempel bandara yang pernah disinggahi, dan masa berlaku visa aktif. |
+| **Fast Barcode Scanner** | **Gerbang Autogate Imigrasi Bandara** | Penumpang menempelkan paspor ke mesin pemindai; dalam 1 detik layar langsung menampilkan foto, nama lengkap, dan status izin perjalanan penumpang. |
+| **Batch Registration (Textarea)** | **Daftar Manifest Turis dari Agen Wisata** | Pemandu menyerahkan daftar nomor paspor rombongan turis sekaligus; petugas memasukkan semuanya dalam satu berkas pendaftaran kolektif. |
+| **Status `tersedia` $\rightarrow$ `terjual` $\rightarrow$ `retur`** | **Siklus Hidup Tiket Konser Musik** | Tiket baru di loket (*Tersedia*) $\rightarrow$ Tiket dibeli penonton (*Terjual*) $\rightarrow$ Penonton menukar tiket karena ada gangguan teknis (*Retur*). Tiket yang belum dibeli tidak bisa tiba-tiba diretur! |
+
+---
+
+## 🏷️ 67. Promo Cabang & Engine Price Override: Menghitung Harga Efektif Kasir (POS)
+
+### 67.1 Perbedaan Harga Dasar Produk vs Kebijakan Override Cabang (`inv_price_overrides`)
+
+| Aspek | Harga Dasar Katalog (`inv_products.base_price`) | Promo Cabang (`inv_price_overrides`) |
+| :--- | :--- | :--- |
+| **Cakupan** | Global untuk seluruh sistem toko (Nasional). | Berlaku spesifik di satu cabang/lokasi tertentu (`location_id`). |
+| **Sifat Waktu** | Permanen hingga diubah oleh manajemen. | Dinamis & berbatas waktu (`start_date` sampai `end_date`). |
+| **Model Diskon** | Nilai nominal dasar. | Nominal potongan (`fixed_discount`), Persentase (`percentage`), atau Harga Jadi Langsung (`fixed_price`). |
+| **Pembatasan Volume**| Tidak ada batasan kuota. | Mendukung kuota flash sale (`max_quantity` & `claimed_quantity`). |
+
+---
+
+### 67.2 Domain Invariants Kunci Price Override
+
+1. **Anti-Overlap Invariant (Satu Promo Aktif per Rentang Waktu):**
+   - Sebuah produk di cabang tertentu **dilarang keras** memiliki lebih dari satu promo aktif yang bersinggungan tanggalnya (`startA < endB && endA > startB`).
+   - Mencegah kebingungan kasir dan sistem POS saat menghitung harga barang. Melanggar aturan ini mengembalikan error domain `ErrOverlappingPromo` (HTTP 409 Conflict).
+2. **Flash Sale Quota Depletion (Habis Kuota Kembali ke Harga Normal):**
+   - Jika kuota promo diatur (misal: 10 unit), setiap penjualan di kasir akan menaikkan `claimed_quantity`.
+   - Begitu `claimed_quantity >= max_quantity`, metode domain `IsActiveAt(now)` otomatis mengevaluasi `false`, dan kalkulator kasir langsung mengembalikan harga normal.
+3. **Pemberhentian Manual Kapan Saja (`Deactivate`):**
+   - Manajemen dapat menonaktifkan promo yang sedang berjalan sewaktu-waktu tanpa menghapus rekam jejak historis promo tersebut.
+
+---
+
+### 67.3 Arsitektur Simulator POS Real-Time di Backoffice
+
+Halaman Backoffice `/inventory/price-overrides` dilengkapi dengan **Simulator Hitung Harga Kasir (Real-Time)**:
+1. **Live Computation:** Memanggil use case `GetEffectivePriceUseCase` yang mengevaluasi:
+   - Apakah ada override aktif saat ini untuk cabang dan produk tersebut?
+   - Jika ada, hitung diskon sesuai modelnya (misal: persentase 15% dari Rp 20.999.000 menjadi Rp 17.849.150).
+   - Tampilkan badge hemat biaya dan sisa kuota flash sale secara interaktif.
+2. **Metadata Enrichment:** Data promo diperkaya dengan nama cabang, kode lokasi, nama produk, SKU, dan harga normal dasar katalog secara in-memory untuk efisiensi tinggi.
+
+---
+
+### 67.4 Analogi Sederhana Dunia Nyata
+
+| Konsep Teknis | Analogi Dunia Nyata | Penjelasan Intuitif |
+| :--- | :--- | :--- |
+| **Harga Dasar Katalog (`base_price`)** | **Buku Menu Restoran Pusat** | Daftar harga resmi yang tercetak di buku menu cetak seluruh Indonesia. |
+| **Promo Cabang (`price_override`)** | **Label Kuning Promo Gondola Cabang Surabaya** | Stiker diskon khusus yang ditempel petugas toko di rak cabang Surabaya untuk cuci gudang akhir pekan. |
+| **Anti-Overlap Rule** | **Satu Stiker Diskon per Barang** | Petugas toko dilarang menempelkan dua stiker promo sekaligus di satu barang karena kasir akan bingung stiker mana yang dipakai. |
+| **Quota Depletion (`max_quantity`)** | **Kupon Diskon Terbatas 50 Pendaftar Pertama** | Begitu orang ke-51 datang, kupon dinyatakan habis dan harga kembali normal. |
+
+---
+
+## 🎨 68. Arsitektur UI Dropdown Modern: Mengatasi Sindrom Nested Scrollbar & Clipping pada Dialog Modal
+
+### 68.1 Akar Masalah UX: *Double Scrollbar* & Dropdown Terpotong
+
+Ketika komponen formulir diletakkan di dalam jendela pop-up dialog ([Modal.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/packages/ui/components/Modal.svelte)), sering kali muncul kendala UX:
+- Komponen dropdown/combobox ([Select2.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/packages/ui/components/Select2.svelte)) yang berposisi `absolute` tertahan di dalam batas kontainer modal yang memiliki aturan CSS `overflow-y: auto` dan `overflow: hidden`.
+- Saat dropdown dibuka ke bawah, menu bertambah panjang sehingga modal menganggap kontennya melebihi tinggi layar.
+- **Akibatnya:** Modal memunculkan scrollbar vertikal di sebelah kanan, dan menu dropdown terpotong sehingga pengguna hanya melihat 1 baris opsi saja dan harus menggulir (*scroll*) di dalam modal untuk melihat opsi lainnya.
+
+---
+
+### 68.2 Solusi Arsitektur: *Smart Floating Placement & Viewport Coordinates*
+
+Untuk memberikan pengalaman pengguna sekelas aplikasi kelas dunia (Linear, Stripe, Shopify), kita meningkatkan komponen `Select2`:
+
+1. **Fixed Coordinate Decoupling (`position: fixed`):**
+   - Menu dropdown tidak lagi terkurung di dalam hierarki DOM modal, melainkan memanfaatkan koordinat viewport absolut (`getBoundingClientRect()`).
+   - Hal ini membuat menu dropdown **melayang bebas (*float*)** menembus batas modal tanpa memicu scrollbar pada badan modal.
+2. **Smart Auto-Dropup (Deteksi Ketersediaan Ruang Layar):**
+   - Komponen menghitung sisa ruang vertikal di bawah (`spaceBelow`) dan di atas (`spaceAbove`).
+   - Jika ruang di bawah sempit (< 180px) atau mendekati batas bawah layar, dropdown secara otomatis **membuka ke atas (*Dropup*)** secara mulus.
+3. **Scroll & Resize Tracking:**
+   - Memanfaatkan Svelte 5 `$effect` dengan *capture event listener* pada `window.scroll` dan `window.resize`. Posisi dropdown terus terkunci rapi di bawah (atau di atas) input pemicu meskipun halaman digeser.
+
+---
+
+### 68.3 Analogi Sederhana Dunia Nyata
+
+- **Dropdown Tradisional (`position: absolute` di dalam modal):**
+  Seperti **mencoba membuka payung di dalam mobil kecil**. Payungnya ingin mekar, tetapi atap dan pintu mobil menahannya sehingga payung terjepit dan terpotong.
+- **Smart Floating Dropdown (`position: fixed` + Auto-Placement):**
+  Seperti **lampu proyektor hologram yang dipancarkan ke udara bebas**. Hologram melayang bebas di depan mobil tanpa terhambat oleh kaca atau pintu, dan sensor cerdasnya otomatis mengarahkan sorotan ke atas atau ke bawah tergantung di mana ruang paling lapang tersedia.
+
+---
+
+## 📸 69. Manajemen Media Kategori: Unggah Berkas Gambar Langsung & Kartu Pratinjau Interaktif
+
+### 69.1 Masalah Input URL Manual vs Keunggulan Berkas Unggahan
+
+Sebelumnya, gambar kategori hanya berupa input teks URL (`https://...`):
+- **Kelemahan Input Teks URL:**
+  1. Staf toko harus mencari hosting gambar di luar atau meng-upload foto ke tempat lain terlebih dahulu lalu menyalin link-nya (alurnya berbelit-belit).
+  2. Gambar dari server eksternal rawan *broken link* / 404 jika server pemilik gambar menghapusnya atau memblokir *hotlinking*.
+- **Keunggulan Unggah Langsung (*Direct File Upload*):**
+  1. Staf cukup memilih file JPG/PNG/WebP langsung dari komputernya.
+  2. Gambar disimpan mandiri di folder server lokal (`./uploads/categories/`) dengan penamaan **UUIDv7**, terisolasi, aman, dan berkecepatan load tinggi.
+
+---
+
+### 69.2 Arsitektur Alur Upload Gambar Kategori (Go + SvelteKit)
+
+```text
+[ Browser / Backoffice ]                             [ Backend Go ]
+       │                                                   │
+  (Pilih File)                                             │
+       │                                                   │
+       ├─── POST /api/v1/inventory/categories/upload-image ─┤ (Multipart 5MB)
+       │    (Header: Authorization Bearer)                 │
+       │                                                   ├─ Validasi format (JPG/PNG/WebP)
+       │                                                   ├─ Generate UUIDv7 filename
+       │                                                   ├─ Simpan ke ./uploads/categories/
+       │◄── JSON { "url": "/uploads/categories/...webp" } ──┤
+       │                                                   │
+  (Tampilkan Kartu Preview)                                │
+  (Isi formImageUrl otomatis)                              │
+       │                                                   │
+  (Klik "Buat Kategori")                                   │
+       ├─── POST /api/v1/inventory/categories ─────────────┤ (Payload JSON)
+       │    { name, parent_id, image_url }                 │
+       │◄── 201 Created ───────────────────────────────────┤
+```
+
+1. **Endpoint `POST /api/v1/inventory/categories/upload-image`:**
+   - Dikelola oleh `CategoryHandler.UploadImage` dengan proteksi izin PBAC `inventory.categories.create`.
+   - Menggunakan `r.ParseMultipartForm(10 << 20)` dan validasi batas berkas 5 MB.
+   - File fisik disimpan di `./uploads/categories/<UUIDv7>.<ext>`.
+2. **Komponen Dropzone & Kartu Pratinjau di Backoffice:**
+   - Menyediakan area dropzone interaktif dengan ikon foto dan status loading saat mengunggah.
+   - Setelah berkas terunggah, antarmuka otomatis menampilkan **Kartu Pratinjau** lengkap dengan foto thumbnail, nama berkas, tombol "Ganti Gambar", dan tombol "Hapus".
+   - Tetap menyediakan toggle *"Atau gunakan tautan URL eksternal"* sebagai opsi alternatif yang fleksibel.
+3. **Penyajian di Pohon & Tabel Kategori:**
+   - Setiap kategori yang memiliki `image_url` kini menampilkan foto thumbnail asli di sebelah nama kategori, baik pada tampilan tabel tabular maupun pohon hierarki interaktif (*Tree View*).
+
+---
+
+### 69.3 Analogi Sederhana Dunia Nyata
+
+- **Input Teks URL Eksternal:**
+  Seperti menuliskan catatan di buku menu: *"Untuk melihat gambar rak ini, silakan datang ke toko foto di seberang jalan"*. Jika toko foto tersebut tutup, pelanggan tidak bisa melihat apa-apa.
+- **Unggah Berkas Langsung (Direct Upload):**
+  Seperti **mencetak langsung foto polaroid rak tersebut dan merekatkannya di halaman buku katalog toko**. Fotonya awet, menjadi aset milik sendiri, dan langsung terlihat jelas oleh siapa pun yang membuka buku.
+
+---
+
+## 🎯 70. Standarisasi Menu Aksi Baris Titik Tiga (`ActionMenu`) & Redesain Hirarki Kartu KPI 2-Zona
+
+### 70.1 Masalah Tombol Aksi Berjejer vs Standarisasi Menu Titik Tiga
+
+Pada tabel data transaksi dan data master yang padat (seperti Produk, Kategori, Cabang, Garansi, Barcode, Stok, Mutasi, Serial, dan Promo), deretan tombol ikon horizontal yang banyak memiliki beberapa kelemahan:
+1. **Memakan Lebar Kolom yang Terlalu Luas:**
+   Setiap baris yang memiliki 3–4 tombol (Detail, Cetak, Ubah Status, Edit, Hapus) membuat kolom "Aksi" melebar hingga 180–220px, mengorbankan ruang kolom data utama seperti Nama Produk atau Lokasi.
+2. **Kelelahan Visual (*Visual Noise*):**
+   Mata kasir atau staf gudang terdistraksi oleh puluhan ikon kecil berwarna-warni yang berjejer di setiap baris tabel.
+3. **Solusi: Komponen Reusable `ActionMenu`:**
+   - Disediakan satu tombol trigger titik tiga vertikal (*EllipsisVertical* `...`) yang bersih dan seragam di semua tabel.
+   - Saat diklik, menu melayang (*floating popover*) menampilkan opsi aksi lengkap dengan ikon, label jelas, varian warna (default, primary, danger), pemisah (*divider*), dan penanganan klik di luar menu (*click-outside*).
+   - **Tantangan CSS & Solusi Arsitektural:** Tabel HTML modern selalu dibungkus `overflow-x: auto` agar responsif. Jika menu dropdown menggunakan `position: absolute`, menu akan terpotong oleh batas sel atau batas tabel. `ActionMenu` mengatasi ini dengan **`position: fixed`** berbasis koordinat *viewport* (`getBoundingClientRect`), sehingga menu dapat melayang bebas di atas tabel tanpa terpotong!
+
+---
+
+### 70.2 Mengapa Kartu KPI Butuh Hirarki Visual (Redesain 2-Zona)?
+
+Ketika kartu ringkasan (*KPI stat cards*) ditampilkan sebagai 6 kotak identik berjejer rata dengan warna pastel yang mirip, timbul masalah **ketiadaan hirarki informasi**:
+- Pengguna tidak tahu mana angka yang harus dilihat pertama kali: Apakah Total SKU sama pentingnya dengan Stok Fisik?
+- Angka yang terlalu tebal (*font-black*) justru membuat antarmuka terasa kaku dan berat di mata, apalagi jika teks judul dan keterangannya bersaing tajam.
+
+#### Arsitektur Desain Kartu KPI Bersih & Proporsional:
+1. **Penyajian Langsung Tanpa Panel Pembungkus Berlebih:**
+   - 6 kartu disajikan langsung secara berdampingan dalam grid 6 kolom responsif (`grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6`) tanpa kotak pembungkus sekunder yang memakan ruang vertikal.
+2. **Penyelarasan Tipografi yang Elegan:**
+   - **Angka Metrik:** Dibuat berukuran pas dengan bobot proporsional **`font-normal` (tidak bold)** (`text-2xl font-normal sm:text-3xl`) sehingga bersih dan tidak terasa berat di mata.
+   - **Judul Label Atas:** Diperkecil menjadi **`text-[9.5px]`** dengan huruf kapital dan warna netral lembut `text-neutral-400`.
+   - **Keterangan Bawah:** Diperkecil menjadi **`text-[10px]`** dengan warna memudar (*faded*) `text-neutral-400/80` (dan aksen lembut pada kartu alert) sebagai pelengkap konteks data.
+3. **Kartu Peringatan Interaktif:**
+   - Kartu *Menipis* dan *Habis* tetap dapat diklik secara langsung untuk mengaktifkan filter tabel secara instan.
+
+---
+
+### 70.4 Desain Quick Filter Tab Pills (Outline Abu-Abu Tipis pada State Inaktif)
+
+Ketika tombol filter cepat berjejer dalam antarmuka:
+1. **Masalah Tanpa Outline (Naked Text):**
+   - Jika tombol yang aktif berbentuk *pill* penuh (berwarna gelap dengan sudut melengkung sempurna `rounded-full`), sedangkan tombol inaktif hanya teks melayang tanpa bingkai, antarmuka tampak timpang (*unbalanced*). Tombol inaktif tidak terasa seperti elemen yang bisa diklik (*clickable affordance* berkurang).
+2. **Solusi Desain (Outline Abu-abu Tipis):**
+   - Tombol inaktif diberi garis batas tipis 1px abu-abu netral (`border border-neutral-200 bg-white`) dengan bentuk kapsul `rounded-full`.
+   - Warna teks tetap mempertahankan kode semantik (kuning/amber untuk Menipis, merah untuk Habis, hijau untuk Stok Aman), namun kini memiliki wadah yang rapi dan seragam.
+   - Saat disentuh mouse (*hover*), garis batas sedikit menggelap (`hover:border-neutral-300`) dan latar belakang berubah lembut (`hover:bg-neutral-50`), memberikan umpan balik mikro yang jelas.
+
+---
+
+### 70.5 Analogi Sederhana Dunia Nyata
+
+- **Menu Titik Tiga (`ActionMenu`):**
+  Seperti **Buku Menu Lipat di Meja Restoran**. Alih-alih meletakkan 10 piring, sendok, garpu, pisau, tusuk gigi, dan garam sekaligus menumpuk di depan pelanggan saat baru duduk, pelayan hanya meletakkan satu buku menu ringkas. Saat pelanggan membuka menu tersebut, barulah seluruh pilihan makanan dan minuman terlihat rapi dan teratur.
+- **Tipografi Kartu KPI Bersih & Halus:**
+  Seperti **Papan Speedometer Digital Minimalis**. Angka kecepatan ditampilkan jelas tanpa ketebalan berlebihan (*clean regular weight*), dan satuan `km/jam` serta indikator trip dibuat kecil dan redup agar pengemudi fokus membaca informasi tanpa kelelahan mata.
+- **Pills Filter dengan Outline Tipis:**
+  Seperti **Lencana / Pin Name Tag Panitia**. Ketika seseorang menjadi ketua pelaksana, lencananya berwarna hitam pekat terisi penuh. Sementara anggota lainnya tetap memakai lencana dengan bingkai perak tipis dan teks elegan—semua tetap terlihat sebagai bagian dari tim yang teratur dan seragam, bukan sekadar tempelan kertas biasa.
+
+---
+
+## 71. Dual-Layer Audit Trail di ERP Retail Modular: Ledger Opname (inv_stock_adjustments) vs Log Audit Sistem Terpusat (shared_audit_logs)
+
+### 71.1 Mengapa Penyesuaian Stok (Stock Opname) Wajib Memiliki Riwayat & Catatan?
+
+Dalam operasional toko ritel, jumlah fisik barang di rak pajangan atau gudang sering kali berbeda dengan data di komputer (*stock discrepancy*). Perbedaan ini bisa disebabkan oleh:
+1. Barang rusak atau pecah saat pemajangan (*shrinkage/damaged*).
+2. Kesalahan hitung saat penerimaan barang dari supplier.
+3. Barang hilang atau pencurian.
+4. Bonus atau sampel promosi dari distributor yang belum tercatat.
+
+**Bahaya Besar Jika Sistem Hanya Menimpa (Overwrite) Kolom Quantity:**
+Jika sistem kasir/inventory hanya mengeksekusi `UPDATE inv_stocks SET quantity = 15 WHERE product_id = ...`, maka:
+- Tidak ada yang tahu berapa jumlah stok sebelum diubah.
+- Tidak ada bukti apakah stok bertambah (+3) atau berkurang (-5).
+- Tidak ada catatan alasan mengapa stok diubah.
+- Tidak ada jejak siapa staf/admin yang bertanggung jawab melakukan perubahan tersebut.
+
+Situasi tanpa jejak (*audit trail*) ini sangat rentan dimanfaatkan untuk manipulasi stok atau penggelapan barang oleh oknum karyawan.
+
+---
+
+### 71.2 Arsitektur Dual-Layer Audit Trail: Domain Ledger vs Cross-Cutting Blackbox
+
+Untuk menyelesaikan masalah akuntabilitas tanpa melanggar prinsip kebersihan kode dan Bounded Context, ERP Retail Modular menerapkan strategi **Audit Trail Dua Lapis (Dual-Layer)**:
+
+```text
+               [ Aksi Penyesuaian Stok oleh Admin ]
+                                │
+                                ▼
+        [ inventory.AdjustStockUseCase (Application Layer) ]
+                                │
+        ┌───────────────────────┴───────────────────────┐
+        ▼ (Transaksi Database Sinkron)                  ▼ (Asinkron via In-Process Event Bus)
+  [ LAPISAN 1: DOMAIN LEDGER ]                   [ LAPISAN 2: SYSTEM AUDIT LOG ]
+  Tabel: inv_stock_adjustments                    Tabel: audit_logs
+  - product_id & location_id                      - user_id, user_name, user_role
+  - previous_qty & adjusted_qty                   - action: "STOCK_ADJUSTED"
+  - difference (+/-)                              - entity_type: "inventory_stock"
+  - reason & notes (catatan staf)                 - details (JSON snapshot lengkap)
+  - adjusted_by (UUID staf)                       - ip_address & user_agent
+                                                        ▲
+                                                        │
+                                            [ shared/audit Service ]
+                                            (Berlangganan EventStockAdjusted)
+```
+
+#### Lapisan 1: Domain-Specific Ledger (`inv_stock_adjustments`)
+- **Letak:** Di dalam Modul Inventory (`internal/modules/inventory`).
+- **Sifat:** Terikat erat dengan logika bisnis stok (*tightly coupled to domain*).
+- **Tujuan:** Menyimpan riwayat perubahan fisik stok agar staf gudang dan kepala toko dapat melihat kartu mutasi stok secara instan per barang atau per cabang.
+- **Tampilan UI:** 
+  - Tombol **"Riwayat Opname"** di toolbar atas halaman stok untuk melihat seluruh riwayat cabang.
+  - Opsi **"Riwayat Opname Barang"** pada menu aksi baris (*ActionMenu*) untuk melihat audit trail khusus untuk SKU produk tertentu.
+
+#### Lapisan 2: Cross-Cutting System Audit Log (`shared_audit_logs`)
+- **Letak:** Di dalam Shared Context (`internal/shared/audit`).
+- **Sifat:** Independen dari logika modul bisnis apapun (*domain-agnostic*).
+- **Tujuan:** Bertindak sebagai rekaman forensik terpusat (*blackbox* sistem) yang mencatat seluruh aksi penting di aplikasi (penyesuaian stok, penerimaan barang pembelian, pembayaran pesanan penjualan, penghapusan data master).
+- **Mekanisme Decoupling:** Modul Inventory sama sekali tidak mengenal tabel `audit_logs`. Modul Inventory hanya menerbitkan event `EventStockAdjusted` ke Event Bus. Service `shared/audit` yang menangkap event tersebut dan menulis log secara otomatis.
+- **Tampilan UI:** Menu khusus **"Log Audit Sistem"** (`/audit-logs`) pada sidebar grup "Sistem & Otorisasi" yang dilengkapi filter modul, rentang tanggal, pagination, dan penampil detail snapshot JSON.
+
+---
+
+### 71.3 Struktur Data Database: Skema Tabel dan Foreign Key Isolation
+
+Sesuai aturan arsitektur ERP Modular, tidak boleh ada Foreign Key antar modul atau antar shared context di level skema SQL.
+
+#### 1. Skema Tabel `inv_stock_adjustments` (Migration 009)
+```sql
+CREATE TABLE IF NOT EXISTS inv_stock_adjustments (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    product_id VARCHAR(36) NOT NULL,
+    location_id VARCHAR(36) NOT NULL,
+    previous_qty INT NOT NULL,
+    adjusted_qty INT NOT NULL,
+    difference INT NOT NULL,
+    reason VARCHAR(50) NOT NULL,
+    notes TEXT NULL,
+    adjusted_by VARCHAR(36) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_inv_adj_product (product_id),
+    INDEX idx_inv_adj_location (location_id),
+    INDEX idx_inv_adj_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+#### 2. Skema Tabel `audit_logs` (Shared Migration 003)
+```sql
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id VARCHAR(36) NOT NULL PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    user_name VARCHAR(100) NOT NULL,
+    user_role VARCHAR(50) NOT NULL,
+    action VARCHAR(100) NOT NULL,
+    entity_type VARCHAR(100) NOT NULL,
+    entity_id VARCHAR(36) NOT NULL,
+    details JSON NULL,
+    ip_address VARCHAR(45) NULL,
+    user_agent VARCHAR(255) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_audit_user (user_id),
+    INDEX idx_audit_action (action),
+    INDEX idx_audit_entity (entity_type, entity_id),
+    INDEX idx_audit_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+---
+
+### 71.4 Penerapan di Backend Go: Use Case & Event Bus Publishing
+
+Pada [stock_usecases.go](file:///c:/PROJECT/WEBSITE/erp-retail-modular/backend/internal/modules/inventory/application/stock_usecases.go), saat use case `AdjustStockUseCase.Execute` dipanggil:
+
+1. Sistem mengambil stok saat ini (`previous_qty`).
+2. Menghitung selisih matematis: `diff := adjustedQty - prevQty`.
+3. Memperbarui stok di database melalui `stockRepo.Save`.
+4. Membuat dan menyimpan entitas `StockAdjustment`:
+   ```go
+   adj := &domain.StockAdjustment{
+       ID:          id,
+       ProductID:   productID,
+       LocationID:  locationID,
+       PreviousQty: prevQty,
+       AdjustedQty: adjustedQty,
+       Difference:  diff,
+       Reason:      reason,
+       Notes:       notes,
+       AdjustedBy:  adjustedBy,
+       CreatedAt:   time.Now(),
+   }
+   _ = uc.adjustmentRepo.Save(ctx, adj)
+   ```
+5. Menerbitkan event asinkron ke Event Bus:
+   ```go
+   if uc.eventBus != nil {
+       payload := event.StockAdjustedPayload{
+           ProductID:   productID,
+           LocationID:  locationID,
+           PreviousQty: prevQty,
+           AdjustedQty: adjustedQty,
+           Difference:  diff,
+           Reason:      reason,
+           Notes:       notes,
+           AdjustedBy:  adjustedBy,
+           AdjustedAt:  adj.CreatedAt,
+       }
+       _ = uc.eventBus.Publish(ctx, event.EventStockAdjusted, payload)
+   }
+   ```
+6. Paket `shared/audit` yang telah mendaftar via `SubscribeEventBus` secara otomatis menangkap payload tersebut dan menyimpannya ke `audit_logs` tanpa campur tangan modul Inventory.
+
+---
+
+### 71.5 Analogi Sederhana Dunia Nyata
+
+- **Buku Catatan Opname (`inv_stock_adjustments`):**
+  Seperti **Buku Berita Acara Hitung Fisik di Meja Supervisor Gudang**. Setiap kali supervisor menghitung jumlah barang di rak, ia mencatat di buku khusus: *"Rak A: Kulkas 2 Pintu, stok lama 5, stok fisik 4, selisih -1, alasan: 1 unit cacat bodi dikembalikan ke pabrik, ditandatangani oleh Andi"*. Staf gudang lain yang ingin tahu mengapa jumlah kulkas berkurang cukup membuka buku di meja supervisor tersebut.
+- **Log Audit Sistem (`shared_audit_logs`):**
+  Seperti **Kamera CCTV Otomatis dan Buku Tamu Satpam di Pos Keamanan Gerbang Toko**. Pos satpam tidak peduli detail teknis apakah kulkas itu model 2 pintu atau 1 pintu. Satpam hanya merekam secara objektif dari sudut pandang keamanan gedung: *"Pukul 14.30, Staf ID #042 (Andi, Admin Gudang) membuka pintu lemari penyimpanan, mengubah status unit, dari komputer meja 3"*. Rekaman ini disimpan di brankas pos satpam dan siap dijadikan bukti forensik jika owner atau auditor eksternal melakukan pemeriksaan menyeluruh.
+
+---
+
+## 72. Manajemen Staf Pengguna & PBAC (Permission-Based Access Control) Terpusat: Dari Kontrak Otorisasi ke Matriks Granular Backoffice
+
+### 72.1 Mengapa ERP Membutuhkan PBAC Bukan Sekadar Hardcoded Role?
+
+Pada aplikasi skala kecil, pengembang sering kali menuliskan pengecekan hak akses secara kaku (*hardcoded RBAC*):
+```go
+if user.Role == "admin" || user.Role == "warehouse" {
+    // Boleh ubah stok
+}
+```
+
+**Masalah Besar dalam Praktik Operasional Ritel:**
+1. **Kekakuan Bisnis (*Business Rigidity*):**
+   Toko ritel A memiliki 30 staf dan ingin agar staf gudang **sama sekali tidak boleh** mengubah angka stok (opname hanya boleh dilakukan oleh supervisor/pimpinan). Sebaliknya, toko ritel B adalah ruko kecil dengan 3 staf di mana staf gudang merangkap sebagai admin yang wajib bisa opname harian.
+   Jika kode ditulis hardcoded, sistem tidak bisa dijual ke toko A dan toko B tanpa mengubah kode program (*recompile & redeploy*).
+2. **Prinsip Hak Akses Terkecil (*Principle of Least Privilege*):**
+   Kasir seharusnya hanya bisa membuat penjualan dan melihat stok ketersediaan, tanpa izin mengubah harga promo atau menghapus kategori barang.
+3. **Solusi: PBAC (Permission-Based Access Control):**
+   Aksi dipecah menjadi izin kapabilitas granular dengan format konvensi:
+   `modul.sumberdaya.aksi` (contoh: `inventory.stocks.adjust`, `inventory.products.create`, `inventory.transfers.approve`).
+   Peran (*Role*) hanyalah wadah kelompok izin yang dapat dicentang atau dicabut secara dinamis oleh Pemilik Bisnis melalui antarmuka Backoffice.
+
+---
+
+### 72.2 Arsitektur Backend Go: In-Memory Cached O(1) Permission Evaluation
+
+Jika setiap request HTTP yang masuk ke backend harus melakukan query SQL JOIN ke tabel `shared_roles`, `shared_permissions`, dan `shared_role_permissions`, database akan terbebani oleh ribuan query periksa izin yang berulang.
+
+Untuk mencapai performa maksimal tanpa mengorbankan keamanan, sistem menggunakan arsitektur **In-Memory Thread-Safe Cached Service**:
+
+```text
+HTTP Request Masuk ──► auth.Middleware (Ekstrak JWT Claims: role)
+                             │
+                             ▼
+                    auth.RequirePermission("inventory.stocks.adjust")
+                             │
+                             ▼
+                  permService.HasPermission(role, "inventory.stocks.adjust")
+                             │
+            ┌────────────────┴────────────────┐
+            ▼ (O(1) Baca RAM via RLock)        ▼ (Bypass Langsung)
+      Cek Map di Memory RAM              Role == "owner" / "superadmin"
+      cache[role][permission]            return true (Akses Terbuka)
+            │
+      ┌─────┴──────────────┐
+      ▼ Ada                ▼ Tidak Ada
+  return true          return false (Balas HTTP 403 Forbidden)
+```
+
+#### Komponen Kunci di Backend:
+1. **`shared_permissions`:** Menyimpan daftar 37 kapabilitas izin standar lintas modul.
+2. **`shared_roles`:** Menyimpan metadata peran sistem (`owner`, `superadmin`, `admin`, `warehouse`, `cashier`, `customer`).
+3. **`shared_role_permissions`:** Tabel penghubung relasi banyak-ke-banyak (*many-to-many*) antara peran dan izin.
+4. **`PermissionService` ([permission_service.go](file:///c:/PROJECT/WEBSITE/erp-retail-modular/backend/internal/shared/auth/permission_service.go)):**
+   - Saat backend menyala (*startup*), seluruh relasi peran-izin dimuat ke dalam memori RAM: `map[string]map[string]bool`.
+   - Menggunakan `sync.RWMutex` untuk menjamin keamanan konkurensi antar *goroutine*.
+   - Saat Owner mengubah centang izin via Backoffice (`PUT /api/v1/roles/:role/permissions`), database diperbarui dan cache RAM langsung disinkronkan seketika via `permService.UpdateRolePermissions`.
+
+---
+
+### 72.3 Penerapan Nyata: Mengunci Otorisasi Stock Opname untuk Pimpinan
+
+Sebagai tindak lanjut dari audit kepatuhan internal:
+1. **Pencabutan Hak Akses Gudang:**
+   Izin `inventory.stocks.adjust` dicabut dari konfigurasi default peran `warehouse`.
+2. **Pengecekan Berlapis:**
+   - **Layer Backend:** Route `POST /api/v1/inventory/stocks/adjust` dijaga oleh middleware `require("inventory.stocks.adjust", m.stockHandler.Adjust)`. Jika akun gudang mencoba mengirim request manipulasi API secara langsung, server langsung membalas `403 Forbidden`.
+   - **Layer Frontend:** Pada halaman [stocks/+page.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/routes/%28app%29/inventory/stocks/+page.svelte), opsi menu *Stock Opname (Penyesuaian)* di [ActionMenu](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/packages/ui/components/ActionMenu.svelte) hanya dirender jika peran pengguna adalah pimpinan (`owner`, `superadmin`, `admin`). Staf gudang dan kasir hanya dapat melihat stok dan riwayat kartu mutasi tanpa tombol eksekusi opname.
+
+---
+
+### 72.4 Dua Halaman Backoffice Baru di Menu "Sistem & Otorisasi"
+
+#### 1. Halaman Manajemen Staf & Pengguna ([/users](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/routes/%28app%29/users/+page.svelte))
+- **Metrik KPI:** Menampilkan total staf, staf aktif, dan distribusi peran (Pimpinan, Gudang, Kasir).
+- **Filter Toolbar:** Pencarian cepat (nama, username, email), filter peran, dan filter lokasi penugasan cabang.
+- **Tabel Staf:** Avatar inisial, alamat email, badge peran semantik, nama cabang kerja, status akun, dan tanggal terdaftar.
+- **Modal Registrasi Staf Baru:** Form pembuatan akun staf lengkap dengan pemilihan cabang penugasan via [Select2](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/packages/ui/components/Select2.svelte).
+- **Modal Detail & Konfirmasi Nonaktifkan Akun:** Memastikan proses pembekuan akun staf dilakukan dengan aman dan tercatat.
+
+#### 2. Halaman Matriks Hak Akses Peran ([/roles](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/routes/%28app%29/roles/+page.svelte))
+- **Pengelompokan Modul:** Menyajikan seluruh izin kapabilitas granular yang dikelompokkan rapi per Bounded Context (`inventory`, `shared`).
+- **Checkbox Matriks Interaktif:** Admin/Owner dapat mencentang atau mencabut izin secara granular untuk setiap peran (`admin`, `warehouse`, `cashier`).
+- **Proteksi Akun Owner & Superadmin:** Ditandai dengan badge khusus *Bypass Sistem Penuh* yang terkunci permanen demi stabilitas instalasi.
+- **Pelacakan Perubahan (*Dirty State*):** Menampilkan tombol simpan khusus pada peran yang mengalami perubahan centang, serta tombol "Simpan Semua Perubahan" di header halaman.
+
+---
+
+### 72.5 Analogi Sederhana Dunia Nyata
+
+- **Role vs PBAC: Seragam Kerja vs Kartu Kunci Magnetik (RFID):**
+  - **Role (Peran):** Seperti **warna seragam kerja** karyawan. Kasir memakai rompi hijau, staf gudang memakai kaos kuning, dan manajer memakai kemeja rapi. Siapapun yang melihat dari jauh tahu apa profesi mereka.
+  - **PBAC (Permission-Based Access Control):** Seperti **kartu chip magnetik (RFID)** di saku karyawan. Pintu brankas toko tidak peduli apa warna kaos yang Anda kenakan; pintu brankas hanya membaca data chip RFID yang Anda tempelkan ke pemindai.
+  - Jika pemilik toko memutuskan bahwa staf gudang tidak boleh membuka brankas stok tanpa kehadiran manajer, pemilik toko tidak perlu memecat atau mengganti baju karyawan tersebut. Pemilik toko cukup duduk di depan komputer sekuriti ([/roles](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/routes/%28app%29/roles/+page.svelte)), menghapus izin akses brankas dari kartu chip gudang, dan seketika itu juga pintu brankas terkunci rapat untuk staf gudang!
+
+---
+
+## 73. Field-Level Security & Data Masking untuk HPP (Harga Pokok Penjualan) via PBAC: Melindungi Rahasia Dapur Finansial Ritel
+
+### 73.1 Mengapa HPP (Harga Modal) Adalah Rahasia Tertinggi Toko Ritel?
+
+Dalam industri ritel, harga pokok pembelian (HPP / *purchase price*) dan marjin keuntungan kotor adalah informasi bisnis yang sangat rahasia (*trade secret*).
+
+**Mengapa HPP Wajib Dilindungi?**
+1. **Pemisahan Tugas (*Separation of Concerns*):**
+   Staf kasir bertugas melayani transaksi pelanggan di meja depan, sedangkan staf gudang bertugas membongkar muatan, memverifikasi kuantitas fisik, dan menata barang di rak. Tidak ada satupun proses kerja kasir atau staf gudang yang memerlukan informasi mengenai harga beli barang ke distributor pabrik.
+2. **Mitigasi Risiko Kebocoran & Negosiasi:**
+   Jika kasir mengetahui bahwa sebuah ponsel yang dijual seharga Rp 22.000.000 dibeli dengan modal Rp 18.500.000, ada risiko psikologis di mana staf memberi tahu pelanggan/kerabat untuk meminta diskon berlebihan, atau membocorkan struktur harga kulakan ke toko kompetitor.
+3. **Solusi Melalui PBAC:**
+   Akses melihat HPP tidak lagi dikaitkan secara kaku ke nama jabatan, melainkan diikat ke satu izin kapabilitas atomik: `inventory.products.view_cost`.
+
+---
+
+### 73.2 Bahaya Keamanan Ilusi: Frontend Hiding vs Backend Data Masking
+
+Banyak pengembang pemula melakukan kesalahan fatal dalam menyembunyikan data sensitif di aplikasi web:
+
+```text
+KESALAHAN UMUM (Frontend CSS Hiding / Security Through Obscurity):
+Backend mengirimkan: {"name": "Kulkas", "purchase_price": 4500000}
+Frontend SvelteKit : {#if user.role === 'admin'} Rp 4.500.000 {:else} •••••••• {/if}
+HASIL              : Kasir cukup tekan F12 -> Network Tab -> Baca JSON asli! (BOCOR)
+```
+
+```text
+PENDEKATAN AMAN KELAS ENTERPRISE (Backend Data Masking):
+Backend Evaluasi   : canViewCost := permService.HasPermission(role, "inventory.products.view_cost")
+Jika False         : ProductResponse.PurchasePrice = nil
+Backend mengirimkan: {"name": "Kulkas", "purchase_price": null}
+HASIL              : Sekalipun kasir memeriksa F12, nilai modal asli TIDAK PERNAH dikirim ke browser! (100% AMAN)
+```
+
+#### Implementasi Pointer Nullable di Go:
+Di [interfaces/dto.go](file:///c:/PROJECT/WEBSITE/erp-retail-modular/backend/internal/modules/inventory/interfaces/dto.go):
+```go
+type ProductResponse struct {
+    ID            string  `json:"id"`
+    Name          string  `json:"name"`
+    PurchasePrice *int64  `json:"purchase_price"` // Gunakan pointer agar bisa bernilai nil (null di JSON)
+    SellingPrice  int64   `json:"selling_price"`
+    ...
+}
+```
+Ketika `canViewCost == false`, Go mengatur field ini menjadi `nil`. Ketika di-encode menjadi JSON oleh `json.Marshal`, nilai tersebut berubah menjadi `null` secara bersih.
+
+---
+
+### 73.3 Analisis Efisiensi: Apakah Penarikan Data Menjadi Lebih Lambat?
+
+Jawabannya: **Sama sekali tidak lebih lambat (0% overhead komputasi database).**
+
+1. **Satu Query Database Tunggal:**
+   Backend tetap menjalankan query SQL `SELECT ... FROM inv_products` yang sama persis. Database PostgreSQL tidak dibebani query tambahan maupun `JOIN` tabel izin yang lambat.
+2. **Pengecekan Izin O(1) di Memory:**
+   Fungsi `permService.HasPermission(role, "inventory.products.view_cost")` mengevaluasi cache di memori RAM server dalam hitungan mikrodetik (O(1) look-up map).
+3. **Penyaringan Sekali Jalan (Single Pass):**
+   Pemeriksaan `canViewCost` dilakukan satu kali di awal fungsi handler sebelum melakukan iterasi pemetaan response JSON.
+
+---
+
+### 73.4 Penyelarasan Frontend: Single Source of Truth & Zero Warnings
+
+1. **Kontrak Tipe TypeScript (@erp/types):**
+   Di [packages/types/src/inventory.ts](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/packages/types/src/inventory.ts):
+   ```ts
+   export interface ProductResponse {
+       id: string;
+       purchase_price?: number | null | undefined;
+       selling_price: number;
+       ...
+   }
+   ```
+2. **Proteksi Tampilan Antarmuka Backoffice:**
+   - **Tabel Produk ([master/products/+page.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/routes/%28app%29/master/products/+page.svelte)):**
+     Kolom "Harga Pokok" menampilkan nominal format rupiah jika `item.purchase_price !== null`. Jika `null`, sistem merender teks terenkripsi `••••••••` dengan ikon gembok kecil.
+   - **Modal Detail Stok ([inventory/stocks/+page.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/routes/%28app%29/inventory/stocks/+page.svelte)):**
+     Baris rincian "Harga Pokok (HPP / Modal)" dan "Valuasi Aset Total (Stok Fisik x HPP)" otomatis memproteksi angka jika pengguna berstatus staf operasional lapangan tanpa izin finansial.
+
+---
+
+### 73.5 Analogi Sederhana Dunia Nyata: Salinan Surat Jalan Berstempel Hitam
+
+- **Faktur Asli Distributor vs Salinan Surat Jalan Gudang:**
+  Bayangkan truk distributor datang membawa 50 unit TV tabung.
+  Distributor membawa dua rangkap dokumen:
+  1. **Faktur Penjualan Asli (Diserahkan ke Meja Pimpinan):**
+     Mencantumkan harga beli grosir Rp 1.500.000 per unit, total tagihan Rp 75.000.000, serta nomor rekening bank distributor.
+  2. **Surat Jalan Bongkar Muat (Diserahkan ke Staf Gudang):**
+     Petugas keuangan pimpinan mengambil spidol hitam tebal (*blackout marker*) dan mencoret hitam seluruh kolom harga uang sebelum menyerahkan kertas tersebut ke staf bongkar muat (*Backend Data Masking*).
+  Staf gudang tetap dapat membaca nama TV, tipe varian, dan menghitung kecocokan 50 unit barang secara akurat, tetapi mereka tidak bisa melihat nominal harga beli sekalipun menerawang kertas surat jalan tersebut di bawah sinar matahari!
+
+---
+
+## 74. Resolusi Identitas Aktor Lintas Bounded Context: Transformasi UUID Menjadi Nama Lengkap Staf yang Human-Readable
+
+### 74.1 Masalah Tampilan UUID Mentah Pada Dokumen Transaksi
+
+Ketika seorang pimpinan menyetujui mutasi stok (Stock Transfer) antar cabang, sistem menyimpan identitas unik aktor (UUIDv7) di kolom `approved_by` (misal: `01a0ca15-36d9-75f5-bf00-ebf63de85bca`).
+
+**Masalah Pada Tampilan Antarmuka:**
+Bagi mesin, UUID adalah format terbaik karena unik secara global dan terurut secara kronologis. Namun bagi pengguna manusia di toko ritel, membaca teks *"Disetujui oleh 01a0ca15-36d9-75f5-bf00-ebf63de85bca"* sangat tidak ramah, sulit dibaca, dan merusak standar kejelasan dokumen surat jalan resmi. Pengguna mengharapkan informasi yang jelas: *"Disetujui oleh Administrator Sistem Utama"*.
+
+---
+
+### 74.2 Mengapa Dilarang Melakukan SQL JOIN Lintas Modul? (Prinsip DDD)
+
+Mengapa kita tidak langsung menulis query SQL seperti ini?
+```sql
+-- DILARANG KERAS (Anti-Pattern Modular Monolith):
+SELECT t.*, u.name as approver_name 
+FROM inv_stock_transfers t
+JOIN users u ON u.id = t.approved_by;
+```
+
+**Alasan Arsitektural:**
+1. **Isolasi Bounded Context:** Tabel `inv_stock_transfers` adalah domain privat milik modul **Inventory**, sedangkan tabel `users` adalah domain privat milik **Shared Auth**.
+2. **Kopling Database (*Tight Coupling*):** Jika kita membuat foreign key atau query JOIN SQL lintas tabel antar modul yang berbeda, maka batasan modul menjadi kabur (*leaky abstraction*). Jika di kemudian hari modul Auth dipisah menjadi layanan autentikasi terpusat (SSO / microservice terpisah), modul Inventory akan langsung rusak total.
+3. **Aturan Komunikasi:** Komunikasi antar Bounded Context hanya boleh dilakukan melalui antarmuka publik Go (*facade/service*) atau Event Bus.
+
+---
+
+### 74.3 Solusi Bersih: Pola UserResolver & In-Memory Thread-Safe Caching
+
+Untuk menjembatani kebutuhan data nama staf tanpa merusak isolasi modul, kita menggunakan pola **UserResolver**:
+
+```text
+HTTP GET /api/v1/inventory/transfers/{id}
+                    │
+                    ▼
+          StockTransferHandler
+                    │
+        [ Ambil Data Transfer ] -> ApprovedBy = "01a0ca15-..."
+                    │
+                    ▼
+          UserResolver.ResolveUserName(ctx, "01a0ca15-...")
+                    │
+           ┌────────┴────────┐
+           ▼ (Cache Hit)     ▼ (Cache Miss - O(1) Memory / DB Look-up)
+      Baca sync.Map       Query users by ID/Username -> Simpan ke sync.Map
+           │                 │
+           └────────┬────────┘
+                    ▼
+        ApprovedByName = "Administrator Sistem Utama"
+                    │
+                    ▼
+JSON Response:
+{
+  "transfer_number": "TRF-202609-0003",
+  "approved_by": "01a0ca15-36d9-75f5-bf00-ebf63de85bca",
+  "approved_by_name": "Administrator Sistem Utama"
+}
+```
+
+#### Komponen Kunci di Go:
+1. **Interface Publik `auth.UserResolver` ([service.go](file:///c:/PROJECT/WEBSITE/erp-retail-modular/backend/internal/shared/auth/service.go)):**
+   Menyediakan kontrak `ResolveUserName` (tunggal) dan `ResolveUserNames` (kolektif/batch) yang dapat dikonsumsi oleh modul manapun.
+2. **In-Memory Cache `sync.Map`:**
+   Memastikan pencarian nama pengguna tidak membebani database berulang kali untuk staf yang sama.
+3. **Penyuntikan Dependency di `main.go` ([main.go](file:///c:/PROJECT/WEBSITE/erp-retail-modular/backend/cmd/server/main.go)):**
+   `inventoryMod.Register(mux, authMiddleware, permService, authService)`. Modul Inventory menerima kontrak `UserResolver` tanpa perlu mengimpor repository internal milik Auth.
+
+---
+
+### 74.4 Penyesuaian Antarmuka SvelteKit Backoffice
+
+Pada [transfers/+page.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/apps/backoffice/src/routes/%28app%29/inventory/transfers/+page.svelte):
+1. **Tabel Mutasi Stok:** Kolom Pemohon menampilkan `{trf.requested_by_name || trf.requested_by}`.
+2. **Header Modal Surat Jalan:** Menampilkan `Diajukan oleh: {selectedTransfer.requested_by_name || selectedTransfer.requested_by}`.
+3. **Timeline Alur Logistik:**
+   - Step 2 (Disetujui): Menampilkan `oleh {selectedTransfer.approved_by_name || selectedTransfer.approved_by}`.
+   - Step 4 (Diterima Lengkap): Menampilkan `oleh {selectedTransfer.received_by_name || selectedTransfer.received_by}`.
+
+---
+
+### 74.5 Analogi Sederhana Dunia Nyata: Nomor Induk Kependudukan (NIK) vs Papan Nama Dada
+
+- **UUID = Nomor Induk Kependudukan (NIK / NIP):**
+  Di kantor dinas kependudukan pusat atau sistem arsip personalia, setiap orang memiliki nomor identitas unik berupa deretan angka panjang untuk memastikan tidak ada kekeliruan data dengan orang lain yang bernama sama.
+- **Display Name = Papan Nama Dada (Nametag):**
+  Ketika pimpinan menandatangani surat jalan muatan truk di lobi toko, pimpinan mengenakan papan nama dada yang terbaca jelas: *"Administrator Sistem Utama"*.
+  Supir truk dan staf gudang tidak perlu menghafal deretan angka NIK pimpinan; mereka cukup melihat nametag tersebut untuk memastikan bahwa dokumen surat jalan telah ditandatangani oleh pejabat toko yang berwenang.
+
+---
+
+## ⚖️ 75. Standar Satuan Basis Database vs Kenyamanan Input Pengguna (Unit of Measure UX Decoupling)
+
+### 75.1 Mengapa Basis Database Menggunakan Gram, Tetapi Form Input Menggunakan Kilogram (Kg)?
+
+Dalam perancangan sistem ERP retail:
+1. **Integritas Database (Integer Precision):**
+   - Database MySQL menyimpan bobot barang dalam kolom `weight_gram INT NOT NULL DEFAULT 0`.
+   - Mengapa integer gram? Karena bilangan bulat (`int`) **kebal dari _floating-point precision error_** (contoh: di JavaScript atau database float, `0.1 + 0.2 = 0.30000000000000004`).
+   - Gram adalah satuan dasar terkecil yang presisi untuk kebutuhan logistik ekspedisi (JNE, SiCepat, kargo) dan perhitungan ongkos kirim.
+2. **Kenyamanan Input Operasional Toko (Human Ergonomics):**
+   - Karyawan toko retail elektronik lebih terbiasa membaca dan memasukkan bobot barang dalam satuan **Kilogram (Kg)**, misalnya kulkas `50` Kg atau laptop `1.8` Kg, daripada harus mengetik angka puluhan ribu seperti `50000` gram.
+   - Angka yang terlalu panjang rawan salah ketik (*human error*, misalnya kelebihan atau kekurangan angka nol).
+
+---
+
+### 75.2 Pola Arsitektur: Transformasi Nilai Dua Arah di SvelteKit (+page.svelte)
+
+Agar backend tetap mempertahankan kontrak database yang bersih tanpa perlu migrasi kolom, seluruh transformasi dilakukan secara elegan pada lapisan frontend SvelteKit:
+
+```text
+       [ Tampilan Form UI ]
+                 │
+      Pengguna mengetik: "50" (Kg)
+                 │
+                 ▼
+      [ Svelte Form State: formWeightKg ]
+                 │
+                 ▼
+      Saat Tombol Simpan Diklik (handleSubmitForm):
+      const numWeight = parseFloat(formWeightKg);
+      weight_gram = Math.round(numWeight * 1000);  // 50 * 1000 = 50.000 gram
+                 │
+                 ▼
+      [ HTTP POST /api/v1/inventory/products ] -> JSON: { "weight_gram": 50000 }
+                 │
+                 ▼
+      [ Backend Go & Database MySQL ] -> inv_products.weight_gram = 50000
+
+================================================================================
+
+      Saat Membuka Modal Edit (openEditModal):
+      formWeightKg = prod.weight_gram ? (prod.weight_gram / 1000) : ''; // 50000 / 1000 = 50 Kg
+```
+
+#### Komponen Penunjang:
+1. **Komponen `Input.svelte` ([Input.svelte](file:///c:/PROJECT/WEBSITE/erp-retail-modular/frontend/packages/ui/components/Input.svelte)):**
+   Ditambahkan prop `step="any"` dan `min="0"` sehingga pengguna dapat memasukkan bobot pecahan desimal (misal: `0.5` kg untuk barang 500 gram) tanpa memicu error validasi form bawaan HTML5.
+2. **Katalog & Detail Produk:**
+   Tabel utama dan modal detail mengonversi nilai gram ke format Kg yang mudah dibaca dengan pemisah ribuan standar Indonesia: `(prod.weight_gram / 1000).toLocaleString('id-ID') + ' kg'`.
+
+---
+
+### 75.3 Analogi Sederhana Dunia Nyata: Timbangan Truk Ekspedisi vs Pembukuan Nota Kantor
+
+- **Database (Gram) = Pembukuan Akuntansi / Resi Ekspedisi:**
+  Pihak ekspedisi kargo menghitung tarif per gram terkecil untuk menentukan batas toleransi tarif timbangan. Di sistem komputer mereka, semuanya dihitung dalam satuan terkecil agar tidak ada selisih satu sen pun akibat pembulatan.
+- **Form Input (Kg) = Spidol pada Kardus Barang:**
+  Pabrik kulkas menuliskan tulisan besar di kardus: *"Netto: 50 Kg"*.
+  Staf toko yang menerima barang cukup membaca angka 50 tersebut dan mengetikkan `50` pada komputer kasir.
+  Komputer secara otomatis mencatatnya sebagai `50.000 gram` di database pusat tanpa merepotkan staf untuk menghitung nol secara manual.
+
+---
+
+## 📥 76. Mekanisme Drag & Drop File Upload pada Antarmuka Web Modern (HTML5 Drag & Drop API & Svelte 5)
+
+### 76.1 Mengapa Drag & Drop Berkas Tidak Otomatis Berfungsi pada Elemen HTML Biasa?
+
+Secara *default* bawaan browser web:
+1. Ketika sebuah berkas (gambar, PDF, dokumen) diseret (*drag*) dari File Explorer / Finder komputer ke dalam jendela browser, perilaku standar browser adalah **mencoba membuka berkas tersebut secara langsung** (misal mengarahkan tab browser ke file gambar tersebut atau memunculkan tanda lingkaran silang/larangan).
+2. Browser **TIDAK AKAN** memicu aksi *drop* pada elemen web kecuali kita secara eksplisit **mencegat dan membatalkan perilaku bawaan tersebut** (*prevent default*) pada event `dragover` dan `dragenter`.
+
+---
+
+### 76.2 Anatomi 4 Event Kunci Drag & Drop di Svelte 5
+
+Untuk membuat kotak *dropzone* foto yang responsif, stabil, dan bebas *glitch* (kedip-kedip saat kursor melintas di atas teks atau ikon), diterapkan teknik berikut:
+
+```text
+Pengguna Menyeret File ke Dropzone
+               │
+               ▼
+[ ondragenter & ondragover ] ──► e.preventDefault() & e.stopPropagation()
+               │                 isDragging = true (Kotak menyala biru/primary)
+               ▼
+   Kursor Keluar dari Kotak
+               │
+               ▼
+        [ ondragleave ] ────────► isDragging = false (Kembali ke abu-abu normal)
+               │
+               ▼
+   Pengguna Melepas File (Drop)
+               │
+               ▼
+          [ ondrop ] ──────────► e.preventDefault() & isDragging = false
+                                 Ambil berkas: e.dataTransfer.files
+                                 Validasi Format (JPG/PNG/WebP) & Ukuran (≤ 5MB)
+                                 Unggah / Tampilkan Pratinjau Gambar
+```
+
+#### Trik Kunci: Mengapa Wajib `pointer-events-none` pada Elemen Anak?
+Di dalam kotak `<label>` atau `<div>` dropzone terdapat elemen anak seperti ikon `<svg>` dan teks `<span>`.
+Jika elemen anak tidak diberi class `pointer-events-none`:
+- Saat kursor mouse melintas dari area kosong kotak ke atas teks/ikon, browser akan menganggap kursor telah *meninggalkan* area dropzone utama dan memicu event `dragleave`, sehingga kotak dropzone berkedip-kedip (*flicker*).
+- Dengan `pointer-events-none` pada pembungkus isi anak, seluruh area kotak dihitung sebagai satu kesatuan utuh yang solid dan mulus.
+
+---
+
+### 76.3 Analogi Sederhana Dunia Nyata: Kotak Surat Pos Fisik vs Jendela Kaca Kantor
+
+- **Perilaku Bawaan Browser = Melempar Surat ke Kaca Jendela Tertutup:**
+  Jika Anda membawa surat dari luar dan melemparnya ke kaca jendela kantor, surat akan terpental jatuh ke tanah (atau memecahkan kaca). Jendela kantor secara default tidak didesain untuk menerima barang lemparan.
+- **`ondragover` + `preventDefault()` = Petugas Pos yang Membuka Corong Kotak Surat:**
+  Ketika Anda mendekatkan surat ke lubang kotak pos, ada tuas corong yang membuka penutupnya (`preventDefault()`) dan menyalakan lampu indikator hijau (`isDragging = true`).
+- **`ondrop` = Surat Masuk ke Keranjang Pos:**
+  Surat meluncur mulus ke dalam keranjang sortir, diperiksa beratnya dengan timbangan (validasi ukuran ≤ 5MB), dan langsung disiapkan untuk diantarkan (proses upload/preview).
+
+---
+
+## 🗂️ 77. Pola Kartu Sortable Tanpa Library Eksternal (Drag-to-Reorder Card List)
+
+### 77.1 Konsep Teknis: Mengatur Urutan Elemen Array dengan HTML5 Drag Events di Svelte 5
+
+Alih-alih menginstal library pihak ketiga yang besar (seperti SortableJS atau dnd-kit), kita memanfaatkan kemampuan murni HTML5 Drag & Drop dengan state Svelte 5:
+
+```text
+Pengguna Menyeret Kartu Foto B (index 1) ke Posisi A (index 0):
+1. ondragstart (B):
+   draggedPhotoIndex = 1
+   e.dataTransfer.setData('text/plain', '1')
+
+2. ondragover / ondragenter (A):
+   dragOverPhotoIndex = 0 (Kartu A membesar halus scale-103 dengan ring biru)
+
+3. ondrop (A):
+   sourceIndex = 1, targetIndex = 0
+   const [moved] = array.splice(1, 1);
+   array.splice(0, 0, moved); // Susunan baru: [B, A, C]
+
+4. Reaktivitas Svelte 5:
+   Karena array diberi key unik (item.previewUrl atau img.id),
+   Svelte 5 otomatis menggeser node DOM tanpa perlu render ulang dari nol.
+```
+
+---
+
+### 77.2 Invariant Bisnis: Elemen Index 0 (Paling Kiri) = Foto Utama (*Single Source of Truth*)
+
+Aturan UX yang ditetapkan: **Foto di posisi paling kiri (index 0) adalah Foto Utama**.
+
+1. **Mode Tambah Produk Baru (`!isEditing`):**
+   - Kartu index 0 otomatis memiliki badge `Utama` berwarna indigo dan border highlight.
+   - Saat formulir dikirim (`handleSubmitForm`), pengunggahan file diproses sesuai urutan array:
+     `uploadProductImage(token, id, item.file, i === 0)`
+     Sehingga foto yang digeser ke index 0 otomatis tersimpan dengan `is_primary = true` di backend database.
+2. **Mode Edit Produk (`isEditing`):**
+   - Saat sebuah foto digeser ke index 0 (`targetIndex === 0`), sistem langsung memanggil fungsi `handleSetPrimaryImage(movedItem.id)`.
+   - Backend memperbarui `is_primary = TRUE` pada database MySQL secara transaksional (`tx.ExecContext`), dan tabel katalog langsung memperbarui thumbnail produk.
+
+---
+
+### 77.3 Analogi Sederhana Dunia Nyata: Menggeser Foto di Etalase Kaca Toko
+
+- **Kartu Tambahan = Foto Produk di Rak Belakang:**
+  Toko memiliki beberapa foto kulkas: tampak depan, tampak dalam lemari, dan tampak belakang mesin.
+- **Kartu Paling Kiri (Index 0) = Poster Terdepan di Etalase Depan Toko:**
+  Pemilik toko mengambil foto tampak dalam lemari dari rak belakang, lalu menggesernya ke posisi paling depan di etalase toko.
+  Otomatis, siapapun pengunjung mall yang lewat di depan toko akan melihat foto tampak dalam lemari tersebut sebagai gambar sampul produk.
+
+---
+
+## 💰 78. Pola Masking Input Finansial: Titik Pemisah Ribuan Otomatis (Thousand Separator UX)
+
+### 78.1 Mengapa `<input type="number">` Kurang Bersahabat untuk Angka Finansial Rupiah?
+
+Dalam transaksi ritel di Indonesia, nominal mata uang Rupiah kerap melibatkan digit angka nol yang panjang (misalnya Rp 1.500.000 atau Rp 25.000.000).
+1. **Masalah Elemen Bawaan Browser (`type="number"`):**
+   - Menolak tanda titik (`.`) sebagai pemisah ribuan karena dalam standar HTML5 internasional titik dianggap sebagai tanda desimal pecahan (*decimal point*).
+   - Memunculkan tombol penggeser panah (*number spinner*) yang tidak relevan untuk nominal uang jutaan rupiah.
+   - Tanpa pemisah ribuan, mata manusia sangat mudah terkecoh (*cognitive load* tinggi) saat membedakan antara `150000` (150 ribu), `1500000` (1,5 juta), atau `15000000` (15 juta).
+2. **Solusi Elegan di Input.svelte:**
+   - Menggunakan mode teks dengan atribut `inputmode="numeric"`.
+   - Mengonversi digit masukan secara *real-time* ke format standar Indonesia menggunakan `toLocaleString('id-ID')` sehingga otomatis muncul pemisah titik: `1.500.000`.
+   - Tetap mengikat (*two-way binding*) nilai numerik murni bertipe `number` (contoh: `1500000`) ke state parent, sehingga lapisan bisnis dan backend Go tetap menerima angka integer yang murni tanpa perlu parsing string manual.
+
+---
+
+### 78.2 Algoritma Preservasi Posisi Kursor (*Cursor Position Retention*)
+
+Tantangan utama saat memformat teks input secara langsung adalah kecenderungan kursor melompat ke akhir kalimat setelah tanda titik disisipkan.
+Untuk mengatasinya, diterapkan algoritma pelacak digit:
+
+```text
+Pengguna mengetik atau mengedit di tengah angka "150.000":
+1. Hitung jumlah digit murni sebelum posisi kursor saat ini:
+   digitsBeforeCursor = rawVal.slice(0, cursorPos).replace(/\D/g, '').length
+
+2. Format ulang seluruh digit:
+   formatted = num.toLocaleString('id-ID')
+
+3. Telusuri string yang baru diformat hingga menemukan digit ke-N yang sama:
+   for (char of formatted) {
+     if (isDigit(char)) count++;
+     if (count === digitsBeforeCursor) { newPos = index + 1; break; }
+   }
+
+4. Setel ulang kursor ke posisi baru:
+   input.setSelectionRange(newPos, newPos);
+```
+
+Dengan algoritma ini, pengguna dapat mengedit angka di posisi manapun (depan, tengah, belakang) secara alami tanpa kursor melompat sembarangan.
+
+---
+
+### 78.3 Analogi Sederhana Dunia Nyata: Papan Hitung Abakus vs Struk Mesin Kasir
+
+- **Input Tanpa Titik = Deretan Manik-Manik Abakus Tanpa Sekat:**
+  Jika Anda melihat 7 manik-manik berjejer rapat `OOOOOOO`, Anda harus menghitung satu per satu dengan jari untuk memastikan apakah jumlahnya 6 atau 7.
+- **Input Bertitik = Mesin Kasir Elektronik dengan Titik Pembatas:**
+  Di layar mesin kasir toko, nominal langsung dikelompokkan per tiga digit: `1.500.000`. Cukup satu kali lirikan mata, kasir langsung tahu itu nominal satu setengah juta rupiah. Peluang salah input nol berkurang drastis menjadi nol.
+
+---
+
+## ⌨️ 79. Ergonomi Form Enterprise: Intersepsi Tombol Enter Varian & Sticky Modal Action Bar
+
+### 79.1 Anatomi Form Submission HTML5 vs Alur Kerja Entri Cepat Operator
+
+1. **Perilaku Standar Form HTML5:**
+   - Dalam peramban (*web browser*), setiap kali pengguna menekan tombol `Enter` di dalam elemen `<input>` teks manapun di dalam sebuah `<form>`, browser secara otomatis memicu event `submit` (*implicit submission*).
+   - Akibatnya, jika pengguna sedang mengetik atribut varian dinamis (misalnya nama spesifikasi atau nilai varian) dan menekan tombol `Enter`, form langsung mencoba menyimpan seluruh produk padahal data belum selesai diinput. Hal ini memicu validasi error prematur dan mengganggu ritme pengetikan operator.
+
+2. **Solusi Intersepsi Keydown (`handleVariantKeyDown`):**
+   - Kita menambahkan prop `onkeydown` pada komponen reusable `Input.svelte`.
+   - Pada input atribut varian generik, kita menyadap event `keydown`:
+     ```typescript
+     function handleVariantKeyDown(e: KeyboardEvent, index: number, field: 'key' | 'value') {
+       if (e.key === 'Enter') {
+         e.preventDefault(); // Mencegah form tersimpan secara prematur
+         e.stopPropagation();
+
+         if (field === 'key' && formVariants[index]?.key.trim() && !formVariants[index]?.value) {
+           // Jika nama atribut sudah diketik, pindahkan kursor langsung ke nilai atribut di baris yang sama
+           focusVariantInput(index, 'value');
+         } else {
+           // Jika nilai atribut selesai diketik, otomatis tambahkan baris varian baru dan fokuskan ke baris baru
+           addVariantField();
+         }
+       }
+     }
+     ```
+   - **Hasil UX:** Operator dapat menginput puluhan spesifikasi varian hanya dengan keyboard secara berurutan:
+     Ketik Nama $\to$ `Enter` $\to$ Ketik Nilai $\to$ `Enter` $\to$ Baris baru muncul dan kursor otomatis siap di baris baru! Tanpa perlu menyentuh mouse sama sekali.
+
+---
+
+### 79.2 Pemisahan Area Gulir: Scrollable Body vs Sticky Action Bar di Modal
+
+1. **Permasalahan Tombol Ikut Ter-scroll (*Drifting Action Bar*):**
+   - Form produk memiliki banyak field (SKU, nama, kategori, harga, pajak, nomor seri, varian, galeri foto, hingga editor deskripsi WYSIWYG).
+   - Jika tombol aksi ("Batal" dan "Simpan Produk") diletakkan di bagian paling bawah konten form yang panjang, operator harus melakukan *scrolling* panjang ke bawah hanya untuk menemukan tombol Simpan. Jika operator sedang berada di bagian tengah, tombol simpan tidak terlihat di layar.
+
+2. **Arsitektur Pemisahan Slot di `Modal.svelte`:**
+   - Komponen `Modal.svelte` memiliki slot `children` untuk konten tubuh formulir dan slot khusus `footer` untuk bilah tindakan (*action bar*).
+   - Tubuh modal dibatasi dengan tinggi maksimal responsif: `max-h-[calc(100vh-10rem)] overflow-y-auto`.
+   - Bilah tindakan diletakkan di luar kontainer scroll (`{#if footer}`), sehingga selalu menempel (*sticky/fixed*) di bagian bawah jendela modal dengan latar `bg-neutral-50` dan pemisah `border-t border-neutral-200`.
+   - Tombol submit tetap dapat men-submit form utama meskipun berada di luar tag `<form>` dengan memanfaatkan atribut standar HTML5:
+     `<Button type="submit" form="product-form">Simpan Perubahan</Button>`
+
+---
+
+### 79.3 Analogi Sederhana Dunia Nyata: "Papan Alas Berpenjepit (Clipboard) & Tuas Pemutar Kertas Mesin Tik"
+
+- **Intersepsi Tombol Enter = Tuas Penggeser Baris Mesin Tik Klasik:**
+  Pada mesin tik manual, saat juru ketik menekan tuas *Carriage Return*, mesin tik tidak langsung mengirim surat ke kantor pos, melainkan hanya memutar rol kertas untuk berpindah ke baris baru berikutnya. Surat baru dikirim ke kantor pos ketika operator memasukkannya ke dalam amplop segel di akhir kerja.
+- **Sticky Footer Action Bar = Papan Penjepit (Clipboard) Berpenjepit Permanen:**
+  Bayangkan Anda memeriksa daftar inventaris gudang menggunakan papan jalan (*clipboard*). Kertas daftar barang bisa berlembar-lembar panjangnya dan bisa Anda buka-tutup (scroll), namun penjepit besi di bagian atas dan pengait pulpen di bagian bawah papan tetap menempel kokoh di tempatnya, siap digunakan kapanpun Anda butuhkan.
+
+---
+
 _Catatan: Dokumen ini akan terus diperbarui seiring kita mempelajari modul dan konsep-konsep baru!_
+
+
+
+
+
 
 
 

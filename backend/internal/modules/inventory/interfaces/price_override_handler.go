@@ -88,6 +88,51 @@ func (h *PriceOverrideHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, mapPriceOverrideToResponse(po))
 }
 
+// ListAll mengambil seluruh daftar promo harga khusus dengan filter (produk, cabang, status aktif).
+// Endpoint: GET /api/v1/inventory/price-overrides
+func (h *PriceOverrideHandler) ListAll(w http.ResponseWriter, r *http.Request) {
+	var productID *string
+	if pid := r.URL.Query().Get("product_id"); pid != "" {
+		productID = &pid
+	}
+	var locationID *string
+	if lid := r.URL.Query().Get("location_id"); lid != "" {
+		locationID = &lid
+	}
+	var isActive *bool
+	if act := r.URL.Query().Get("is_active"); act != "" {
+		val := act == "true" || act == "1"
+		isActive = &val
+	}
+
+	query := application.ListAllPriceOverridesQuery{
+		ProductID:  productID,
+		LocationID: locationID,
+		IsActive:   isActive,
+	}
+
+	details, err := h.listUC.ExecuteAll(r.Context(), query)
+	if err != nil {
+		h.logger.Error("gagal mengambil seluruh price overrides", "error", err)
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "terjadi kesalahan internal server"})
+		return
+	}
+
+	res := make([]PriceOverrideResponse, 0, len(details))
+	for _, d := range details {
+		rItem := mapPriceOverrideToResponse(d.Override)
+		rItem.ProductName = d.ProductName
+		rItem.ProductSKU = d.ProductSKU
+		rItem.ProductBrand = d.ProductBrand
+		rItem.BasePrice = d.BasePrice
+		rItem.LocationName = d.LocationName
+		rItem.LocationCode = d.LocationCode
+		res = append(res, rItem)
+	}
+
+	writeJSON(w, http.StatusOK, res)
+}
+
 // List mengambil riwayat dan daftar promo untuk suatu produk.
 // Endpoint: GET /api/v1/inventory/products/{id}/price-overrides
 func (h *PriceOverrideHandler) List(w http.ResponseWriter, r *http.Request) {

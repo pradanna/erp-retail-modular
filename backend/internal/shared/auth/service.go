@@ -4,16 +4,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/erp-retail/backend/pkg/uid"
 )
+
+// UserResolver menyediakan kapabilitas penyelesaian nama pengguna (ID/username -> Full Name) untuk modul lain.
+type UserResolver interface {
+	ResolveUserName(ctx context.Context, idOrUsername string) string
+	ResolveUserNames(ctx context.Context, idsOrUsernames []string) map[string]string
+}
 
 // Service menangani use case logika bisnis autentikasi, step-up auth, dan manajemen staf.
 type Service struct {
 	repo      UserRepository
 	jwtSecret string
 	tokenTTL  time.Duration
+	nameCache sync.Map
 }
 
 // NewService membuat instance baru Service autentikasi.
@@ -55,7 +64,7 @@ func (s *Service) Login(ctx context.Context, identifier, password string) (strin
 		loc = *user.LocationID
 	}
 
-	token, err := GenerateToken(s.jwtSecret, user.ID, string(user.Role), loc, s.tokenTTL)
+	token, err := GenerateToken(s.jwtSecret, user.ID, user.Username, user.Name, string(user.Role), loc, s.tokenTTL)
 	if err != nil {
 		return "", nil, fmt.Errorf("gagal membuat token autentikasi: %w", err)
 	}
@@ -147,4 +156,61 @@ func (s *Service) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 	}
 
 	return s.repo.Update(ctx, user)
+}
+
+// ResolveUserName menyelesaikan nama lengkap pengguna dari idOrUsername.
+// Jika idOrUsername cocok dengan ID atau Username user di database, nama lengkap akan dikembalikan.
+func (s *Service) ResolveUserName(ctx context.Context, idOrUsername string) string {
+	clean := strings.TrimSpace(idOrUsername)
+	if clean == "" {
+		return ""
+	}
+
+	// 1. Cek cache memori (O(1) look-up)
+	if val, ok := s.nameCache.Load(clean); ok {
+		if name, ok := val.(string); ok && name != "" {
+			return name
+		}
+	}
+
+	// 2. Cek alias/fallback seeder awal jika ada
+	if clean == "usr_admin_01" {
+		s.nameCache.Store(clean, "Admin Operasional")
+		return "Admin Operasional"
+	}
+
+	// 3. Coba cari berdasarkan ID (UUID)
+	u, err := s.repo.FindByID(ctx, clean)
+	if err == nil && u != nil && u.Name != "" {
+		s.nameCache.Store(u.ID, u.Name)
+		s.nameCache.Store(u.Username, u.Name)
+		return u.Name
+	}
+
+	// 4. Coba cari berdasarkan Username
+	u, err = s.repo.FindByUsernameOrEmail(ctx, clean)
+	if err == nil && u != nil && u.Name != "" {
+		s.nameCache.Store(u.ID, u.Name)
+		s.nameCache.Store(u.Username, u.Name)
+		return u.Name
+	}
+
+	// 5. Fallback: simpan dan kembalikan identitas aslinya
+	s.nameCache.Store(clean, clean)
+	return clean
+}
+
+// ResolveUserNames menyelesaikan sekumpulan ID/username secara batch.
+func (s *Service) ResolveUserNames(ctx context.Context, idsOrUsernames []string) map[string]string {
+	result := make(map[string]string, len(idsOrUsernames))
+	for _, id := range idsOrUsernames {
+		clean := strings.TrimSpace(id)
+		if clean == "" {
+			continue
+		}
+		if _, exists := result[clean]; !exists {
+			result[clean] = s.ResolveUserName(ctx, clean)
+		}
+	}
+	return result
 }

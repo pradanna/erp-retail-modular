@@ -70,15 +70,26 @@ type ProductResponse struct {
 	Brand         string         `json:"brand"`
 	Description   string         `json:"description"`
 	Unit          string         `json:"unit"`
-	PurchasePrice int64          `json:"purchase_price"`
+	PurchasePrice *int64         `json:"purchase_price"`
 	SellingPrice  int64          `json:"selling_price"`
 	Status             string         `json:"status"`
 	IsPPN              bool           `json:"is_ppn"`
 	FlagSerialTracking bool           `json:"flag_serial_tracking"`
 	WeightGram         int            `json:"weight_gram"`
 	AtributVarian      map[string]any `json:"atribut_varian"`
+	PrimaryImageURL    *string        `json:"primary_image_url,omitempty"`
 	CreatedAt          time.Time      `json:"created_at"`
 	UpdatedAt          time.Time      `json:"updated_at"`
+}
+
+// ProductImageResponse adalah DTO data foto produk untuk dikirim ke client.
+type ProductImageResponse struct {
+	ID        string    `json:"id"`
+	ProductID string    `json:"product_id"`
+	URL       string    `json:"url"`
+	IsPrimary bool      `json:"is_primary"`
+	SortOrder int       `json:"sort_order"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // ListProductResponse adalah respons untuk endpoint list produk.
@@ -127,17 +138,21 @@ type CategoryResponse struct {
 // --- Location DTOs ---
 
 type CreateLocationRequest struct {
-	Code    string `json:"code"`
-	Name    string `json:"name"`
-	Type    string `json:"type"` // "physical" atau "online"
-	Address string `json:"address,omitempty"`
+	Code      string   `json:"code"`
+	Name      string   `json:"name"`
+	Type      string   `json:"type"` // "physical" atau "online"
+	Address   string   `json:"address,omitempty"`
+	Latitude  *float64 `json:"latitude,omitempty"`
+	Longitude *float64 `json:"longitude,omitempty"`
 }
 
 type UpdateLocationRequest struct {
-	Code    string `json:"code"`
-	Name    string `json:"name"`
-	Type    string `json:"type"` // "physical" atau "online"
-	Address string `json:"address,omitempty"`
+	Code      string   `json:"code"`
+	Name      string   `json:"name"`
+	Type      string   `json:"type"` // "physical" atau "online"
+	Address   string   `json:"address,omitempty"`
+	Latitude  *float64 `json:"latitude,omitempty"`
+	Longitude *float64 `json:"longitude,omitempty"`
 }
 
 type SetLocationStatusRequest struct {
@@ -150,6 +165,8 @@ type LocationResponse struct {
 	Name      string    `json:"name"`
 	Type      string    `json:"type"`
 	Address   string    `json:"address"`
+	Latitude  *float64  `json:"latitude,omitempty"`
+	Longitude *float64  `json:"longitude,omitempty"`
 	IsActive  bool      `json:"is_active"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -183,6 +200,23 @@ type StockResponse struct {
 	MinStock          int       `json:"min_stock"`
 	IsLowStock        bool      `json:"is_low_stock"`
 	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// StockAdjustmentResponse adalah data representasi riwayat penyesuaian stok (Stock Opname).
+type StockAdjustmentResponse struct {
+	ID               string `json:"id"`
+	ProductID        string `json:"product_id"`
+	ProductName      string `json:"product_name"`
+	ProductSKU       string `json:"product_sku"`
+	LocationID       string `json:"location_id"`
+	LocationName     string `json:"location_name"`
+	PreviousQuantity int    `json:"previous_quantity"`
+	NewQuantity      int    `json:"new_quantity"`
+	Difference       int    `json:"difference"`
+	Reason           string `json:"reason"`
+	AdjustedBy       string `json:"adjusted_by"`
+	AdjustedByName   string `json:"adjusted_by_name"`
+	CreatedAt        string `json:"created_at"`
 }
 
 // --- Barcode DTOs ---
@@ -225,6 +259,11 @@ type SerialUnitResponse struct {
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
+	ProductName  string    `json:"product_name,omitempty"`
+	ProductSKU   string    `json:"product_sku,omitempty"`
+	ProductBrand string    `json:"product_brand,omitempty"`
+	LocationName string    `json:"location_name,omitempty"`
+	LocationCode string    `json:"location_code,omitempty"`
 }
 
 // SerialUnitLookupResponse adalah respon hasil scan nomor seri/IMEI untuk kasir dan layanan garansi.
@@ -269,6 +308,12 @@ type PriceOverrideResponse struct {
 	IsActive          bool      `json:"is_active"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
+	ProductName       string    `json:"product_name,omitempty"`
+	ProductSKU        string    `json:"product_sku,omitempty"`
+	ProductBrand      string    `json:"product_brand,omitempty"`
+	BasePrice         int64     `json:"base_price,omitempty"`
+	LocationName      string    `json:"location_name,omitempty"`
+	LocationCode      string    `json:"location_code,omitempty"`
 }
 
 // EffectivePriceResponse adalah representasi harga jual final untuk kasir POS.
@@ -331,8 +376,11 @@ type StockTransferResponse struct {
 	Notes           string                      `json:"notes"`
 	RejectionReason string                      `json:"rejection_reason,omitempty"`
 	RequestedBy     string                      `json:"requested_by"`
+	RequestedByName string                      `json:"requested_by_name,omitempty"`
 	ApprovedBy      *string                     `json:"approved_by,omitempty"`
+	ApprovedByName  *string                     `json:"approved_by_name,omitempty"`
 	ReceivedBy      *string                     `json:"received_by,omitempty"`
+	ReceivedByName  *string                     `json:"received_by_name,omitempty"`
 	Items           []StockTransferItemResponse `json:"items"`
 	CreatedAt       time.Time                   `json:"created_at"`
 	UpdatedAt       time.Time                   `json:"updated_at"`

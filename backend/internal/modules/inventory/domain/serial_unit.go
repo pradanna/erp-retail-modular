@@ -28,9 +28,23 @@ const (
 	SerialStatusReturned  SerialStatus = "retur"    // Diretur oleh pelanggan karena rusak/klaim garansi
 )
 
+// NormalizeSerialStatus mengubah alias status (misal: 'available' -> 'tersedia') ke format resmi.
+func NormalizeSerialStatus(s string) SerialStatus {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "tersedia", "available":
+		return SerialStatusAvailable
+	case "terjual", "sold":
+		return SerialStatusSold
+	case "retur", "returned", "defective":
+		return SerialStatusReturned
+	default:
+		return SerialStatus(s)
+	}
+}
+
 // IsValid memvalidasi apakah status serial sesuai dengan enum yang diizinkan.
 func (s SerialStatus) IsValid() bool {
-	switch s {
+	switch NormalizeSerialStatus(string(s)) {
 	case SerialStatusAvailable, SerialStatusSold, SerialStatusReturned:
 		return true
 	default:
@@ -120,3 +134,14 @@ func (u *SerialUnit) TransferLocation(newLocationID string) error {
 	u.UpdatedAt = time.Now().UTC()
 	return nil
 }
+
+// MarkAsAvailable mengembalikan unit fisik (misal setelah inspeksi retur/re-stock) menjadi 'tersedia'.
+func (u *SerialUnit) MarkAsAvailable() error {
+	if u.Status != SerialStatusReturned {
+		return errors.New("hanya unit berstatus 'retur' yang dapat dikembalikan menjadi 'tersedia'")
+	}
+	u.Status = SerialStatusAvailable
+	u.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
