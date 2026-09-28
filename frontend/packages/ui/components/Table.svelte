@@ -15,6 +15,7 @@
     emptyTitle?: string;
     emptyMessage?: string;
     loading?: boolean;
+    borderless?: boolean;
     children: Snippet;
   }
 
@@ -23,11 +24,16 @@
     emptyTitle = 'Belum Ada Data',
     emptyMessage = 'Tidak ada catatan yang tersedia untuk ditampilkan.',
     loading = false,
+    borderless = false,
     children,
   }: Props = $props();
 </script>
 
-<div class="w-full overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xs">
+<div
+  class="w-full {borderless
+    ? ''
+    : 'overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xs'}"
+>
   <div class="overflow-x-auto">
     <table class="w-full text-left text-xs text-neutral-600">
       {@render children()}

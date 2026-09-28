@@ -176,10 +176,11 @@ type LocationResponse struct {
 
 // AdjustStockRequest adalah struktur JSON untuk penyesuaian stok manual (Stock Opname).
 type AdjustStockRequest struct {
-	ProductID   string `json:"product_id"`
-	LocationID  string `json:"location_id"`
-	NewQuantity int    `json:"new_quantity"`
-	Reason      string `json:"reason,omitempty"`
+	ProductID      string `json:"product_id"`
+	LocationID     string `json:"location_id"`
+	AdjustmentDate string `json:"adjustment_date,omitempty"` // YYYY-MM-DD
+	NewQuantity    int    `json:"new_quantity"`
+	Reason         string `json:"reason,omitempty"`
 }
 
 // UpdateMinStockRequest adalah struktur JSON untuk memperbarui batas minimum stok (alert threshold).
@@ -210,6 +211,7 @@ type StockAdjustmentResponse struct {
 	ProductSKU       string `json:"product_sku"`
 	LocationID       string `json:"location_id"`
 	LocationName     string `json:"location_name"`
+	AdjustmentDate   string `json:"adjustment_date"` // YYYY-MM-DD
 	PreviousQuantity int    `json:"previous_quantity"`
 	NewQuantity      int    `json:"new_quantity"`
 	Difference       int    `json:"difference"`
@@ -427,4 +429,96 @@ type ProductWarrantyResponse struct {
 	Policy           *WarrantyPolicyResponse `json:"policy,omitempty"`
 	CreatedAt        time.Time               `json:"created_at"`
 	UpdatedAt        time.Time               `json:"updated_at"`
+}
+
+// --- Stock Movement (Barang Masuk & Keluar) DTOs ---
+
+// CreateStockMovementItemRequest adalah baris item dalam request transaksi barang masuk/keluar.
+type CreateStockMovementItemRequest struct {
+	ProductID     string   `json:"product_id"`
+	Quantity      int      `json:"quantity"`
+	Notes         string   `json:"notes,omitempty"`
+	SerialNumbers []string `json:"serial_numbers,omitempty"`
+}
+
+// CreateStockMovementRequest adalah request body untuk membuat transaksi Barang Masuk atau Keluar.
+type CreateStockMovementRequest struct {
+	MovementDate    string                           `json:"movement_date,omitempty"` // YYYY-MM-DD
+	LocationID      string                           `json:"location_id"`
+	CategoryReason  string                           `json:"category_reason"`
+	ReferenceNumber string                           `json:"reference_number,omitempty"`
+	Notes           string                           `json:"notes,omitempty"`
+	Items           []CreateStockMovementItemRequest `json:"items"`
+}
+
+// StockMovementItemResponse merepresentasikan baris item dalam response dokumen pergerakan stok.
+type StockMovementItemResponse struct {
+	ID            string   `json:"id"`
+	ProductID     string   `json:"product_id"`
+	ProductName   string   `json:"product_name"`
+	ProductSKU    string   `json:"product_sku"`
+	Quantity      int      `json:"quantity"`
+	Notes         string   `json:"notes"`
+	SerialNumbers []string `json:"serial_numbers,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// StockMovementResponse adalah representasi JSON lengkap dokumen Barang Masuk atau Keluar.
+type StockMovementResponse struct {
+	ID              string                      `json:"id"`
+	MovementNumber  string                      `json:"movement_number"`
+	Type            string                      `json:"type"`
+	MovementDate    string                      `json:"movement_date"` // YYYY-MM-DD
+	LocationID      string                      `json:"location_id"`
+	LocationName    string                      `json:"location_name"`
+	CategoryReason  string                      `json:"category_reason"`
+	ReferenceNumber string                      `json:"reference_number"`
+	Notes           string                      `json:"notes"`
+	ExecutedBy      string                      `json:"executed_by"`
+	ExecutedByName  string                      `json:"executed_by_name"`
+	Items           []StockMovementItemResponse `json:"items"`
+	CreatedAt       time.Time                   `json:"created_at"`
+}
+
+// StockCardEntryResponse merepresentasikan satu baris mutasi dalam laporan kartu stok.
+type StockCardEntryResponse struct {
+	Date            time.Time `json:"date"`
+	MovementType    string    `json:"movement_type"`
+	DocumentNumber  string    `json:"document_number"`
+	ReferenceNumber string    `json:"reference_number"`
+	CategoryReason  string    `json:"category_reason"`
+	InQuantity      int       `json:"in_quantity"`
+	OutQuantity     int       `json:"out_quantity"`
+	Balance         int       `json:"balance"`
+	ExecutedByName  string    `json:"executed_by_name"`
+	Notes           string    `json:"notes"`
+}
+
+// StockCardReportResponse merepresentasikan response laporan kartu stok satu produk di satu cabang.
+type StockCardReportResponse struct {
+	ProductID      string                   `json:"product_id"`
+	ProductName    string                   `json:"product_name"`
+	ProductSKU     string                   `json:"product_sku"`
+	LocationID     string                   `json:"location_id"`
+	LocationName   string                   `json:"location_name"`
+	OpeningBalance int                      `json:"opening_balance"`
+	TotalIn        int                      `json:"total_in"`
+	TotalOut       int                      `json:"total_out"`
+	ClosingBalance int                      `json:"closing_balance"`
+	Entries        []StockCardEntryResponse `json:"entries"`
+}
+
+// StockValuationItemResponse merepresentasikan baris item dalam laporan valuasi persediaan.
+type StockValuationItemResponse struct {
+	ProductID      string  `json:"product_id"`
+	ProductSKU     string  `json:"product_sku"`
+	ProductName    string  `json:"product_name"`
+	CategoryName   string  `json:"category_name"`
+	LocationID     string  `json:"location_id"`
+	LocationName   string  `json:"location_name"`
+	Quantity       int     `json:"quantity"`
+	MinStock       int     `json:"min_stock"`
+	BasePrice      float64 `json:"base_price"`
+	TotalValuation float64 `json:"total_valuation"`
+	Status         string  `json:"status"`
 }

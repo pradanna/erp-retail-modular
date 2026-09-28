@@ -8,6 +8,7 @@ import (
 
 	"github.com/erp-retail/backend/internal/modules/inventory/application"
 	"github.com/erp-retail/backend/internal/modules/inventory/domain"
+	"github.com/erp-retail/backend/internal/shared/auth"
 )
 
 // LocationHandler menangani seluruh HTTP request untuk master lokasi cabang/gudang.
@@ -114,6 +115,34 @@ func (h *LocationHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 		}
 		h.logger.Error("gagal mengambil detail lokasi", "id", id, "error", err.Error())
 		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "gagal mengambil detail lokasi"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toLocationResponse(loc))
+}
+
+// GetMyAssignedLocation menangani GET /api/v1/inventory/locations/my
+// Mengembalikan data detail lokasi/cabang tempat user yang sedang login bertugas.
+func (h *LocationHandler) GetMyAssignedLocation(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r)
+	if claims == nil || claims.UserID == "" {
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "autentikasi dibutuhkan"})
+		return
+	}
+
+	if claims.Location == "" {
+		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "akun tidak terikat pada cabang tertentu (akses global)"})
+		return
+	}
+
+	loc, err := h.getLocation.Execute(r.Context(), claims.Location)
+	if err != nil {
+		if errors.Is(err, application.ErrLocationNotFound) {
+			writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "lokasi penugasan tidak ditemukan"})
+			return
+		}
+		h.logger.Error("gagal mengambil detail lokasi penugasan", "location_id", claims.Location, "error", err.Error())
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: "gagal memuat data lokasi penugasan"})
 		return
 	}
 

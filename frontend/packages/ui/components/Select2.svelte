@@ -19,6 +19,7 @@
   interface Props {
     id?: string;
     label?: string;
+    size?: 'sm' | 'md' | 'lg';
     value?: string | number;
     options: (SelectOption | Select2Option)[];
     placeholder?: string;
@@ -37,6 +38,7 @@
   let {
     id = `select2-${Math.random().toString(36).slice(2, 9)}`,
     label = '',
+    size = 'md',
     value = $bindable(''),
     options = [],
     placeholder = 'Pilih salah satu...',
@@ -51,6 +53,18 @@
     placement = 'auto',
     onchange,
   }: Props = $props();
+
+  const triggerSizeClasses: Record<string, string> = {
+    sm: 'h-8 text-xs',
+    md: 'h-10 text-xs',
+    lg: 'h-12 text-sm',
+  };
+
+  const labelSizeClasses: Record<string, string> = {
+    sm: 'text-2xs font-medium text-neutral-700',
+    md: 'text-xs font-medium text-neutral-700',
+    lg: 'text-sm font-medium text-neutral-800',
+  };
 
   let isOpen = $state(false);
   let searchQuery = $state('');
@@ -261,7 +275,7 @@
   {/if}
 
   {#if label}
-    <label for={id} class="mb-1.5 block text-xs font-medium text-neutral-700">
+    <label for={id} class="mb-1.5 block {labelSizeClasses[size] ?? labelSizeClasses.md}">
       {label}
       {#if required && showRequiredAsterisk}
         <span class="text-rose-500">*</span>
@@ -278,7 +292,12 @@
     onkeydown={handleKeydown}
     aria-haspopup="listbox"
     aria-expanded={isOpen}
-    class="flex h-10 w-full items-center justify-between rounded-xl border bg-white px-3.5 text-xs text-neutral-900 shadow-2xs transition-all focus:outline-hidden disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400 {error
+    class="flex w-full items-center justify-between border bg-white text-neutral-900 shadow-2xs transition-all focus:outline-hidden disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400 {size ===
+    'sm'
+      ? 'h-8 rounded-lg px-2.5 text-xs'
+      : size === 'lg'
+        ? 'h-12 rounded-xl px-3.5 text-sm'
+        : 'h-10 rounded-xl px-3.5 text-xs'} {error
       ? 'border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-500/20'
       : isOpen
         ? 'border-primary-500 ring-primary-500/20 ring-2'
@@ -329,7 +348,7 @@
 
       <span class="text-neutral-400 transition-transform duration-200 {isOpen ? 'rotate-180' : ''}">
         <svg
-          class="h-4 w-4"
+          class="{size === 'sm' ? 'h-3.5 w-3.5' : 'h-4 w-4'}"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"

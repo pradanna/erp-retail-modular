@@ -72,6 +72,7 @@ func main() {
 	_ = os.MkdirAll("./uploads/products", 0755)
 	_ = os.MkdirAll("./uploads/categories", 0755)
 	mux.Handle("GET /uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("./uploads"))))
+	mux.Handle("GET /api/v1/uploads/", http.StripPrefix("/api/v1/uploads/", http.FileServer(http.Dir("./uploads"))))
 
 	// ── 7. Mount middleware auth ─────────────────────────────────────────────
 	// auth.Middleware mengembalikan fungsi pembungkus handler.

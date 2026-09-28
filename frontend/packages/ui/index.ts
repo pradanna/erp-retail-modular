@@ -22,4 +22,9 @@ export { toast } from './components/toast.svelte.ts';
 export type { ToastItem, ToastType, ToastOptions } from './components/toast.svelte.ts';
 export { default as ActionMenu } from './components/ActionMenu.svelte';
 export type { ActionMenuItem } from './components/ActionMenu.svelte';
+export { generateCode128Svg, computeCode128 } from './components/barcode-utils.js';
+export type { Code128SvgOptions, BarcodeRenderData } from './components/barcode-utils.js';
+export { default as BarcodePrintModal } from './components/BarcodePrintModal.svelte';
+export type { PrintSerialItem } from './components/BarcodePrintModal.svelte';
+export { portal } from './actions/portal.js';
 

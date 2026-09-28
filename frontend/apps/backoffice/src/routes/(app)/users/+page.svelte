@@ -81,10 +81,7 @@
 		error = null;
 
 		try {
-			const [userList, locList] = await Promise.all([
-				listUsers(token),
-				listLocations(token)
-			]);
+			const [userList, locList] = await Promise.all([listUsers(token), listLocations(token)]);
 			users = userList;
 			locations = locList;
 		} catch (err: unknown) {
@@ -183,7 +180,9 @@
 	const stats = $derived.by(() => {
 		const total = users.length;
 		const active = users.filter((u) => u.is_active).length;
-		const adminCount = users.filter((u) => u.role === 'admin' || u.role === 'superadmin' || u.role === 'owner').length;
+		const adminCount = users.filter(
+			(u) => u.role === 'admin' || u.role === 'superadmin' || u.role === 'owner'
+		).length;
 		const warehouseCount = users.filter((u) => u.role === 'warehouse').length;
 		const cashierCount = users.filter((u) => u.role === 'cashier').length;
 		return { total, active, adminCount, warehouseCount, cashierCount };
@@ -195,7 +194,9 @@
 		return loc ? loc.name : 'Lokasi Tidak Dikenal';
 	}
 
-	function getRoleBadgeVariant(role: string): 'primary' | 'success' | 'warning' | 'info' | 'default' {
+	function getRoleBadgeVariant(
+		role: string
+	): 'primary' | 'success' | 'warning' | 'info' | 'default' {
 		switch (role) {
 			case 'owner':
 			case 'superadmin':
@@ -330,21 +331,36 @@
 				Staf & Pengguna Sistem
 			</h1>
 			<p class="mt-1 text-xs text-neutral-500">
-				Kelola akun staf internal toko, penugasan lokasi cabang, dan otorisasi operasional kasir serta gudang.
+				Kelola akun staf internal toko, penugasan lokasi cabang, dan otorisasi operasional kasir
+				serta gudang.
 			</p>
 		</div>
 
 		<div class="flex items-center gap-2">
 			<Button variant="outline" size="sm" onclick={refreshUsers}>
-				<svg class="h-4 w-4 text-neutral-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+				<svg
+					class="h-4 w-4 text-neutral-500"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="1.75"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"
+					/>
 				</svg>
 				Segarkan
 			</Button>
 
 			<Button variant="primary" size="sm" onclick={openCreateModal}>
 				<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M19 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.765z" />
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M19 7.5v3m0 0v3m0-3h3m-3 0h-3m-2.25-4.125a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zM4 19.235v-.11a6.375 6.375 0 0112.75 0v.109A12.318 12.318 0 0110.374 21c-2.331 0-4.512-.645-6.374-1.765z"
+					/>
 				</svg>
 				Tambah Staf
 			</Button>
@@ -360,103 +376,138 @@
 	<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
 		<!-- Total Staf -->
 		<div class="rounded-xl border border-neutral-200 bg-white p-3.5 shadow-2xs">
-			<div class="text-[9.5px] font-semibold tracking-wider text-neutral-400 uppercase">Total Staf</div>
+			<div class="text-[9.5px] font-semibold tracking-wider text-neutral-400 uppercase">
+				Total Staf
+			</div>
 			<div class="mt-1 text-2xl font-normal text-neutral-900 sm:text-3xl">{stats.total}</div>
 			<div class="mt-0.5 text-[10px] text-neutral-400/80">Akun terdaftar</div>
 		</div>
 
 		<!-- Staf Aktif -->
 		<div class="rounded-xl border border-neutral-200 bg-white p-3.5 shadow-2xs">
-			<div class="text-[9.5px] font-semibold tracking-wider text-emerald-600 uppercase">Status Aktif</div>
+			<div class="text-[9.5px] font-semibold tracking-wider text-emerald-600 uppercase">
+				Status Aktif
+			</div>
 			<div class="mt-1 text-2xl font-normal text-emerald-700 sm:text-3xl">{stats.active}</div>
 			<div class="mt-0.5 text-[10px] text-emerald-600/80">Bisa login ke sistem</div>
 		</div>
 
 		<!-- Pimpinan & Admin -->
 		<div class="rounded-xl border border-neutral-200 bg-white p-3.5 shadow-2xs">
-			<div class="text-[9.5px] font-semibold tracking-wider text-sky-600 uppercase">Pimpinan & Admin</div>
+			<div class="text-[9.5px] font-semibold tracking-wider text-sky-600 uppercase">
+				Pimpinan & Admin
+			</div>
 			<div class="mt-1 text-2xl font-normal text-sky-700 sm:text-3xl">{stats.adminCount}</div>
 			<div class="mt-0.5 text-[10px] text-neutral-400/80">Owner, Superadmin, Admin</div>
 		</div>
 
 		<!-- Admin Gudang -->
 		<div class="rounded-xl border border-neutral-200 bg-white p-3.5 shadow-2xs">
-			<div class="text-[9.5px] font-semibold tracking-wider text-amber-600 uppercase">Admin Gudang</div>
+			<div class="text-[9.5px] font-semibold tracking-wider text-amber-600 uppercase">
+				Admin Gudang
+			</div>
 			<div class="mt-1 text-2xl font-normal text-amber-700 sm:text-3xl">{stats.warehouseCount}</div>
 			<div class="mt-0.5 text-[10px] text-neutral-400/80">Pengelola stok & mutasi</div>
 		</div>
 
 		<!-- Kasir Penjualan -->
 		<div class="rounded-xl border border-neutral-200 bg-white p-3.5 shadow-2xs">
-			<div class="text-[9.5px] font-semibold tracking-wider text-emerald-600 uppercase">Kasir Toko</div>
+			<div class="text-[9.5px] font-semibold tracking-wider text-emerald-600 uppercase">
+				Kasir Toko
+			</div>
 			<div class="mt-1 text-2xl font-normal text-emerald-700 sm:text-3xl">{stats.cashierCount}</div>
 			<div class="mt-0.5 text-[10px] text-neutral-400/80">Operator transaksi POS</div>
 		</div>
 	</div>
 
 	<!-- Filter & Search Toolbar -->
-	<div class="flex flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-3.5 shadow-2xs lg:flex-row lg:items-center lg:justify-between">
+	<div
+		class="flex flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-3.5 shadow-2xs lg:flex-row lg:items-center lg:justify-between"
+	>
 		<!-- Quick Filter Role Pills -->
 		<div class="flex flex-wrap items-center gap-1.5">
 			<button
 				type="button"
-				onclick={() => { selectedRoleFilter = ''; currentPage = 1; }}
-				class="inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors {selectedRoleFilter === ''
+				onclick={() => {
+					selectedRoleFilter = '';
+					currentPage = 1;
+				}}
+				class="inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors {selectedRoleFilter ===
+				''
 					? 'border-neutral-900 bg-neutral-900 text-white shadow-2xs'
-					: 'border-neutral-200 bg-white text-neutral-700 hover:border-neutral-300 hover:bg-neutral-50 shadow-2xs'}"
+					: 'border-neutral-200 bg-white text-neutral-700 shadow-2xs hover:border-neutral-300 hover:bg-neutral-50'}"
 			>
 				Semua Peran ({users.length})
 			</button>
 
 			<button
 				type="button"
-				onclick={() => { selectedRoleFilter = 'admin'; currentPage = 1; }}
-				class="inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors {selectedRoleFilter === 'admin'
+				onclick={() => {
+					selectedRoleFilter = 'admin';
+					currentPage = 1;
+				}}
+				class="inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors {selectedRoleFilter ===
+				'admin'
 					? 'border-neutral-900 bg-neutral-900 text-white shadow-2xs'
-					: 'border-neutral-200 bg-white text-neutral-700 hover:border-neutral-300 hover:bg-neutral-50 shadow-2xs'}"
+					: 'border-neutral-200 bg-white text-neutral-700 shadow-2xs hover:border-neutral-300 hover:bg-neutral-50'}"
 			>
 				Admin
 			</button>
 
 			<button
 				type="button"
-				onclick={() => { selectedRoleFilter = 'warehouse'; currentPage = 1; }}
-				class="inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors {selectedRoleFilter === 'warehouse'
+				onclick={() => {
+					selectedRoleFilter = 'warehouse';
+					currentPage = 1;
+				}}
+				class="inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors {selectedRoleFilter ===
+				'warehouse'
 					? 'border-neutral-900 bg-neutral-900 text-white shadow-2xs'
-					: 'border-neutral-200 bg-white text-neutral-700 hover:border-neutral-300 hover:bg-neutral-50 shadow-2xs'}"
+					: 'border-neutral-200 bg-white text-neutral-700 shadow-2xs hover:border-neutral-300 hover:bg-neutral-50'}"
 			>
 				Gudang
 			</button>
 
 			<button
 				type="button"
-				onclick={() => { selectedRoleFilter = 'cashier'; currentPage = 1; }}
-				class="inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors {selectedRoleFilter === 'cashier'
+				onclick={() => {
+					selectedRoleFilter = 'cashier';
+					currentPage = 1;
+				}}
+				class="inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors {selectedRoleFilter ===
+				'cashier'
 					? 'border-neutral-900 bg-neutral-900 text-white shadow-2xs'
-					: 'border-neutral-200 bg-white text-neutral-700 hover:border-neutral-300 hover:bg-neutral-50 shadow-2xs'}"
+					: 'border-neutral-200 bg-white text-neutral-700 shadow-2xs hover:border-neutral-300 hover:bg-neutral-50'}"
 			>
 				Kasir
 			</button>
 		</div>
 
-		<!-- Filter Lokasi Cabang & Search Input -->
+		<!-- Filter Lokasi Cabang & Search Input (Compact) -->
 		<div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-			<div class="w-full sm:w-56">
+			<div class="w-full sm:w-52">
 				<Select2
+					size="sm"
 					options={locationSelect2Options}
 					value={selectedLocationFilter}
 					placeholder="Semua Lokasi / Cabang"
 					searchPlaceholder="Cari cabang..."
 					clearable={true}
-					onchange={(val) => { selectedLocationFilter = String(val); currentPage = 1; }}
+					onchange={(val) => {
+						selectedLocationFilter = String(val);
+						currentPage = 1;
+					}}
 				/>
 			</div>
 
 			<div class="w-full sm:w-64">
 				<SearchInput
+					size="sm"
 					bind:value={searchQuery}
 					placeholder="Cari nama, username, email..."
-					onsearch={() => { currentPage = 1; }}
+					onsearch={() => {
+						currentPage = 1;
+					}}
 				/>
 			</div>
 		</div>
@@ -464,9 +515,16 @@
 
 	<!-- Tabel Daftar Staf Pengguna -->
 	<div class="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xs">
-		<Table empty={paginatedUsers.length === 0} emptyMessage={loading ? 'Memuat data staf pengguna...' : 'Tidak ada staf yang sesuai kriteria pencarian.'}>
+		<Table
+			empty={paginatedUsers.length === 0}
+			emptyMessage={loading
+				? 'Memuat data staf pengguna...'
+				: 'Tidak ada staf yang sesuai kriteria pencarian.'}
+		>
 			<thead>
-				<tr class="border-b border-neutral-200 bg-neutral-50/80 text-left text-2xs font-semibold tracking-wider text-neutral-600 uppercase">
+				<tr
+					class="text-2xs border-b border-neutral-200 bg-neutral-50/80 text-left font-semibold tracking-wider text-neutral-600 uppercase"
+				>
 					<th class="px-4 py-3">Staf Pengguna</th>
 					<th class="px-4 py-3">Email</th>
 					<th class="px-4 py-3 text-center">Peran Sistem</th>
@@ -478,22 +536,28 @@
 			</thead>
 			<tbody class="divide-y divide-neutral-100 text-xs">
 				{#each paginatedUsers as u (u.id)}
-					<tr class="transition-colors hover:bg-neutral-50/60 {!u.is_active ? 'bg-neutral-50/40 opacity-75' : ''}">
+					<tr
+						class="transition-colors hover:bg-neutral-50/60 {!u.is_active
+							? 'bg-neutral-50/40 opacity-75'
+							: ''}"
+					>
 						<!-- Staf Profil & Avatar -->
 						<td class="px-4 py-3">
 							<div class="flex items-center gap-2.5">
-								<div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-2xs font-bold text-white shadow-2xs">
+								<div
+									class="text-2xs flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-neutral-900 font-bold text-white shadow-2xs"
+								>
 									{u.name.charAt(0).toUpperCase()}
 								</div>
 								<div class="min-w-0">
-									<div class="font-semibold text-neutral-900 truncate">{u.name}</div>
-									<div class="font-mono text-2xs text-neutral-400">@{u.username}</div>
+									<div class="truncate font-semibold text-neutral-900">{u.name}</div>
+									<div class="text-2xs font-mono text-neutral-400">@{u.username}</div>
 								</div>
 							</div>
 						</td>
 
 						<!-- Email -->
-						<td class="px-4 py-3 text-neutral-600 font-mono text-xs">
+						<td class="px-4 py-3 font-mono text-xs text-neutral-600">
 							{u.email}
 						</td>
 
@@ -507,9 +571,23 @@
 						<!-- Lokasi Cabang -->
 						<td class="px-4 py-3 text-neutral-700">
 							<div class="flex items-center gap-1.5">
-								<svg class="h-3.5 w-3.5 shrink-0 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
-									<path stroke-linecap="round" stroke-linejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
-									<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
+								<svg
+									class="h-3.5 w-3.5 shrink-0 text-neutral-400"
+									fill="none"
+									viewBox="0 0 24 24"
+									stroke="currentColor"
+									stroke-width="1.75"
+								>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z"
+									/>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z"
+									/>
 								</svg>
 								<span class="truncate">{getLocationName(u.location_id)}</span>
 							</div>
@@ -525,7 +603,7 @@
 						</td>
 
 						<!-- Tanggal Terdaftar -->
-						<td class="px-4 py-3 text-center font-mono text-xs text-neutral-500 whitespace-nowrap">
+						<td class="px-4 py-3 text-center font-mono text-xs whitespace-nowrap text-neutral-500">
 							{formatDateTime(u.created_at)}
 						</td>
 
@@ -564,7 +642,9 @@
 		{totalPages}
 		{totalItems}
 		limit={pageSize}
-		onPageChange={(p) => { currentPage = p; }}
+		onPageChange={(p) => {
+			currentPage = p;
+		}}
 	/>
 </div>
 
@@ -617,7 +697,7 @@
 					showPasswordToggle={true}
 					required
 				/>
-				<p class="mt-1 text-2xs text-neutral-400">
+				<p class="text-2xs mt-1 text-neutral-400">
 					Staf dapat mengganti kata sandi ini secara mandiri melalui pengaturan profil akun.
 				</p>
 			</div>
@@ -645,29 +725,26 @@
 					searchPlaceholder="Cari cabang..."
 					clearable={true}
 				/>
-				<p class="mt-1 text-2xs text-neutral-400">
+				<p class="text-2xs mt-1 text-neutral-400">
 					Kosongkan jika staf berstatus kantor pusat / pengawas seluruh cabang.
 				</p>
 			</div>
 		</div>
 
+		<!-- eslint-disable-next-line @typescript-eslint/no-unused-vars -->
 		{#snippet footer()}
 			<div class="flex items-center justify-end gap-2">
 				<Button
 					type="button"
 					variant="outline"
 					disabled={formSubmitting}
-					onclick={() => { showCreateModal = false; }}
+					onclick={() => {
+						showCreateModal = false;
+					}}
 				>
 					Batal
 				</Button>
-				<Button
-					type="submit"
-					variant="primary"
-					loading={formSubmitting}
-				>
-					Daftarkan Staf
-				</Button>
+				<Button type="submit" variant="primary" loading={formSubmitting}>Daftarkan Staf</Button>
 			</div>
 		{/snippet}
 	</form>
@@ -677,13 +754,17 @@
 <Modal bind:open={showDetailModal} title="Detail Akun Staf" size="md">
 	{#if detailUser}
 		<div class="space-y-4 text-xs">
-			<div class="flex items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50/70 p-3">
-				<div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-sm font-bold text-white shadow-2xs">
+			<div
+				class="flex items-center gap-3 rounded-lg border border-neutral-200 bg-neutral-50/70 p-3"
+			>
+				<div
+					class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-sm font-bold text-white shadow-2xs"
+				>
 					{detailUser.name.charAt(0).toUpperCase()}
 				</div>
 				<div class="min-w-0 flex-1">
-					<div class="text-sm font-bold text-neutral-900 truncate">{detailUser.name}</div>
-					<div class="font-mono text-2xs text-neutral-400">@{detailUser.username}</div>
+					<div class="truncate text-sm font-bold text-neutral-900">{detailUser.name}</div>
+					<div class="text-2xs font-mono text-neutral-400">@{detailUser.username}</div>
 					<div class="mt-1 flex items-center gap-1.5">
 						<Badge variant={getRoleBadgeVariant(detailUser.role)} size="sm">
 							{USER_ROLE_LABELS[detailUser.role] || detailUser.role}
@@ -708,7 +789,9 @@
 				</div>
 				<div class="flex justify-between px-3.5 py-2.5">
 					<span class="text-neutral-500">Lokasi Penugasan</span>
-					<span class="font-semibold text-neutral-900">{getLocationName(detailUser.location_id)}</span>
+					<span class="font-semibold text-neutral-900"
+						>{getLocationName(detailUser.location_id)}</span
+					>
 				</div>
 				<div class="flex justify-between px-3.5 py-2.5">
 					<span class="text-neutral-500">Tanggal Terdaftar</span>
@@ -724,7 +807,12 @@
 
 	{#snippet footer()}
 		<div class="flex justify-end">
-			<Button variant="outline" onclick={() => { showDetailModal = false; }}>Tutup</Button>
+			<Button
+				variant="outline"
+				onclick={() => {
+					showDetailModal = false;
+				}}>Tutup</Button
+			>
 		</div>
 	{/snippet}
 </Modal>
@@ -735,14 +823,18 @@
 		<div class="space-y-3 text-xs text-neutral-600">
 			<p>
 				Apakah Anda yakin ingin
-				<strong class="font-bold {targetStatusUser.is_active ? 'text-rose-600' : 'text-emerald-700'}">
+				<strong
+					class="font-bold {targetStatusUser.is_active ? 'text-rose-600' : 'text-emerald-700'}"
+				>
 					{targetStatusUser.is_active ? 'menonaktifkan' : 'mengaktifkan kembali'}
 				</strong>
-				akun staf <strong class="font-semibold text-neutral-900">{targetStatusUser.name}</strong> (@{targetStatusUser.username})?
+				akun staf <strong class="font-semibold text-neutral-900">{targetStatusUser.name}</strong>
+				(@{targetStatusUser.username})?
 			</p>
 			{#if targetStatusUser.is_active}
-				<div class="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-2xs text-amber-800">
-					Setelah dinonaktifkan, staf ini tidak akan dapat login ke sistem Backoffice maupun POS kasir toko.
+				<div class="text-2xs rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-amber-800">
+					Setelah dinonaktifkan, staf ini tidak akan dapat login ke sistem Backoffice maupun POS
+					kasir toko.
 				</div>
 			{/if}
 		</div>
@@ -754,7 +846,10 @@
 				type="button"
 				variant="outline"
 				disabled={statusSubmitting}
-				onclick={() => { showStatusModal = false; targetStatusUser = null; }}
+				onclick={() => {
+					showStatusModal = false;
+					targetStatusUser = null;
+				}}
 			>
 				Batal
 			</Button>

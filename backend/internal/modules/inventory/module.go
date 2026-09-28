@@ -310,6 +310,7 @@ type Module struct {
 	stockTransferHandler *inventoryHTTP.StockTransferHandler
 	warrantyHandler      *inventoryHTTP.WarrantyHandler
 	productImageHandler  *inventoryHTTP.ProductImageHandler
+	stockMovementHandler *inventoryHTTP.StockMovementHandler
 }
 
 // Service mengembalikan public interface InventoryService untuk digunakan modul lain.
@@ -333,6 +334,7 @@ func New(db *sql.DB, bus event.Bus, logger *slog.Logger) *Module {
 	warrantyPolicyRepo := infrastructure.NewWarrantyPolicyRepository(db)
 	productWarrantyRepo := infrastructure.NewProductWarrantyRepository(db)
 	stockAdjustmentRepo := infrastructure.NewStockAdjustmentRepository(db)
+	stockMovementRepo := infrastructure.NewStockMovementRepository(db)
 
 	// Layer 2: Application — use cases Produk
 	createProductUC := application.NewCreateProductUseCase(productRepo)
@@ -397,6 +399,13 @@ func New(db *sql.DB, bus event.Bus, logger *slog.Logger) *Module {
 	assignProductWarrantyUC := application.NewAssignProductWarrantyUseCase(productRepo, warrantyPolicyRepo, productWarrantyRepo)
 	getProductWarrantiesUC := application.NewGetProductActiveWarrantiesUseCase(productRepo, productWarrantyRepo)
 	deactivateWarrantyUC := application.NewDeactivateProductWarrantyUseCase(productWarrantyRepo)
+
+	// Layer 2: Application — use cases Pergerakan Stok (Barang Masuk / Keluar) & Kartu Stok
+	createMovementUC := application.NewCreateStockMovementUseCase(stockMovementRepo, stockRepo, productRepo, locationRepo, serialRepo, bus)
+	getMovementDetailUC := application.NewGetStockMovementDetailUseCase(stockMovementRepo)
+	listMovementsUC := application.NewListStockMovementsUseCase(stockMovementRepo)
+	getStockCardUC := application.NewGetStockCardReportUseCase(stockMovementRepo)
+	getValuationUC := application.NewGetStockValuationReportUseCase(stockMovementRepo)
 
 	// Layer 3: Interfaces — handlers
 	productHandler := inventoryHTTP.NewProductHandler(
@@ -494,6 +503,15 @@ func New(db *sql.DB, bus event.Bus, logger *slog.Logger) *Module {
 		logger,
 	)
 
+	stockMovementHandler := inventoryHTTP.NewStockMovementHandler(
+		createMovementUC,
+		getMovementDetailUC,
+		listMovementsUC,
+		getStockCardUC,
+		getValuationUC,
+		logger,
+	)
+
 	return &Module{
 		service: &inventoryServiceImpl{
 			repo:         productRepo,
@@ -514,6 +532,7 @@ func New(db *sql.DB, bus event.Bus, logger *slog.Logger) *Module {
 		stockTransferHandler: stockTransferHandler,
 		warrantyHandler:      warrantyHandler,
 		productImageHandler:  productImageHandler,
+		stockMovementHandler: stockMovementHandler,
 	}
 }
 
@@ -555,6 +574,7 @@ func (m *Module) Register(
 	mux.Handle("DELETE /api/v1/inventory/categories/{id}", require("inventory.categories.delete", m.categoryHandler.Delete))
 
 	// --- Routes Lokasi / Cabang ---
+	mux.Handle("GET /api/v1/inventory/locations/my", authMiddleware(http.HandlerFunc(m.locationHandler.GetMyAssignedLocation)))
 	mux.Handle("POST /api/v1/inventory/locations", require("inventory.locations.create", m.locationHandler.Create))
 	mux.Handle("GET /api/v1/inventory/locations", require("inventory.locations.view", m.locationHandler.List))
 	mux.Handle("GET /api/v1/inventory/locations/{id}", require("inventory.locations.view", m.locationHandler.GetByID))
@@ -562,12 +582,22 @@ func (m *Module) Register(
 	mux.Handle("PATCH /api/v1/inventory/locations/{id}/status", require("inventory.locations.status", m.locationHandler.SetStatus))
 	mux.Handle("DELETE /api/v1/inventory/locations/{id}", require("inventory.locations.delete", m.locationHandler.Delete))
 
-	// --- Routes Stok per Cabang / Lokasi ---
+	// --- Routes Stock per Cabang / Lokasi ---
 	mux.Handle("POST /api/v1/inventory/stocks/adjust", require("inventory.stocks.adjust", m.stockHandler.Adjust))
 	mux.Handle("GET /api/v1/inventory/stocks/adjustments", require("inventory.stocks.view", m.stockHandler.ListAdjustments))
 	mux.Handle("PUT /api/v1/inventory/stocks/min-stock", require("inventory.stocks.min_stock", m.stockHandler.UpdateMinStock))
 	mux.Handle("GET /api/v1/inventory/stocks", require("inventory.stocks.view", m.stockHandler.Get))
 	mux.Handle("GET /api/v1/inventory/stocks/alerts", require("inventory.stocks.view", m.stockHandler.ListAlerts))
+
+	// --- Routes Transaksi Barang Masuk & Barang Keluar (WMS Operations) ---
+	mux.Handle("POST /api/v1/inventory/movements/in", require("inventory.stocks.adjust", m.stockMovementHandler.CreateStockIn))
+	mux.Handle("POST /api/v1/inventory/movements/out", require("inventory.stocks.adjust", m.stockMovementHandler.CreateStockOut))
+	mux.Handle("GET /api/v1/inventory/movements", require("inventory.stocks.view", m.stockMovementHandler.List))
+	mux.Handle("GET /api/v1/inventory/movements/{id}", require("inventory.stocks.view", m.stockMovementHandler.GetDetail))
+
+	// --- Routes Laporan Kartu Stok & Valuasi Persediaan ---
+	mux.Handle("GET /api/v1/inventory/reports/stock-card", require("inventory.stocks.view", m.stockMovementHandler.GetStockCard))
+	mux.Handle("GET /api/v1/inventory/reports/valuation", require("inventory.stocks.view", m.stockMovementHandler.GetValuationReport))
 
 	// --- Routes Barcode Produk ---
 	mux.Handle("POST /api/v1/inventory/products/{id}/barcodes", require("inventory.barcodes.manage", m.barcodeHandler.Add))

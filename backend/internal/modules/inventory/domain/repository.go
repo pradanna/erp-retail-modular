@@ -97,6 +97,8 @@ type StockRepository interface {
 type StockAdjustmentFilter struct {
 	LocationID string
 	ProductID  string
+	StartDate  string // YYYY-MM-DD
+	EndDate    string // YYYY-MM-DD
 	Page       int
 	Limit      int
 }
@@ -258,5 +260,26 @@ type ProductImageRepository interface {
 	Delete(ctx context.Context, id string) error
 	SetPrimary(ctx context.Context, productID, imageID string) error
 	CountByProductID(ctx context.Context, productID string) (int, error)
+}
+
+// StockMovementFilter adalah parameter filter untuk listing transaksi pergerakan stok.
+type StockMovementFilter struct {
+	LocationID string
+	Type       *StockMovementType
+	StartDate  *time.Time
+	EndDate    *time.Time
+	Page       int
+	Limit      int
+}
+
+// StockMovementRepository adalah interface persistence untuk transaksi barang masuk/keluar dan kartu stok.
+type StockMovementRepository interface {
+	Save(ctx context.Context, movement *StockMovement) error
+	FindByID(ctx context.Context, id string) (*StockMovement, error)
+	FindByNumber(ctx context.Context, number string) (*StockMovement, error)
+	List(ctx context.Context, filter StockMovementFilter) ([]*StockMovement, int, error)
+	GenerateMovementNumber(ctx context.Context, movementType StockMovementType) (string, error)
+	GetStockCardReport(ctx context.Context, productID, locationID string, startDate, endDate *time.Time) (*StockCardReport, error)
+	GetValuationReport(ctx context.Context, locationID *string) ([]*StockValuationItem, error)
 }
 

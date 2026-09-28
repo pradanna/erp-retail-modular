@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS inv_stock_adjustments (
     id VARCHAR(36) PRIMARY KEY,
     product_id VARCHAR(36) NOT NULL,
     location_id VARCHAR(36) NOT NULL,
+    adjustment_date DATE NOT NULL DEFAULT (CURRENT_DATE), -- Tanggal fisik pelaksanaan stock opname
     previous_quantity INT NOT NULL,
     new_quantity INT NOT NULL,
     difference INT NOT NULL,
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS inv_stock_adjustments (
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_adj_product (product_id),
     INDEX idx_adj_location (location_id),
+    INDEX idx_adj_date (adjustment_date),
     INDEX idx_adj_created (created_at DESC),
     CONSTRAINT fk_adj_product FOREIGN KEY (product_id) REFERENCES inv_products(id) ON DELETE CASCADE,
     CONSTRAINT fk_adj_location FOREIGN KEY (location_id) REFERENCES inv_locations(id) ON DELETE CASCADE

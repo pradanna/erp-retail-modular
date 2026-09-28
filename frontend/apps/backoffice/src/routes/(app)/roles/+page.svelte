@@ -16,14 +16,7 @@
 	import { getRolePermissionsMatrix, updateRolePermissions } from '@erp/api-client';
 	import type { RolePermissionsMatrix, Permission, RoleInfo, UserRole } from '@erp/types';
 	import { ApiError, USER_ROLE_LABELS } from '@erp/types';
-	import {
-		Button,
-		Table,
-		Alert,
-		Badge,
-		SearchInput,
-		toast
-	} from '@erp/ui';
+	import { Button, Table, Alert, Badge, SearchInput, toast } from '@erp/ui';
 
 	// ── 1. State Utama ────────────────────────────────────────────────────────
 	let loading = $state(true);
@@ -83,11 +76,13 @@
 
 	// ── 3. Modul & Filter ─────────────────────────────────────────────────────
 	const availableModules = $derived.by(() => {
-		const set = new Set<string>();
+		const mods: string[] = [];
 		for (const p of permissions) {
-			if (p.module) set.add(p.module);
+			if (p.module && !mods.includes(p.module)) {
+				mods.push(p.module);
+			}
 		}
-		return Array.from(set);
+		return mods;
 	});
 
 	// Peran yang dapat dikonfigurasi (bukan owner / superadmin karena mereka bypass)
@@ -253,36 +248,43 @@
 				Hak Akses Peran & Otorisasi PBAC
 			</h1>
 			<p class="mt-1 text-xs text-neutral-500">
-				Atur matriks izin kapabilitas granular untuk setiap peran operasional (Admin, Gudang, Kasir).
+				Atur matriks izin kapabilitas granular untuk setiap peran operasional (Admin, Gudang,
+				Kasir).
 			</p>
 		</div>
 
 		<div class="flex items-center gap-2">
 			{#if hasAnyChanges}
-				<Button
-					variant="outline"
-					size="sm"
-					disabled={saving}
-					onclick={resetChanges}
-				>
+				<Button variant="outline" size="sm" disabled={saving} onclick={resetChanges}>
 					Batal Ubah
 				</Button>
 
-				<Button
-					variant="primary"
-					size="sm"
-					loading={saving}
-					onclick={saveAllRoles}
-				>
-					<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+				<Button variant="primary" size="sm" loading={saving} onclick={saveAllRoles}>
+					<svg
+						class="h-4 w-4"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+						stroke-width="2"
+					>
 						<path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
 					</svg>
 					Simpan Semua Perubahan
 				</Button>
 			{:else}
 				<Button variant="outline" size="sm" onclick={loadMatrix}>
-					<svg class="h-4 w-4 text-neutral-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+					<svg
+						class="h-4 w-4 text-neutral-500"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+						stroke-width="1.75"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"
+						/>
 					</svg>
 					Segarkan
 				</Button>
@@ -291,18 +293,30 @@
 	</div>
 
 	<!-- Alert Peringatan & Edukasi Keamanan PBAC -->
-	<div class="rounded-xl border border-neutral-200 bg-neutral-50/80 p-4 text-xs text-neutral-700 shadow-2xs">
+	<div
+		class="rounded-xl border border-neutral-200 bg-neutral-50/80 p-4 text-xs text-neutral-700 shadow-2xs"
+	>
 		<div class="flex items-start gap-3">
-			<div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-neutral-900 text-white">
+			<div
+				class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-neutral-900 text-white"
+			>
 				<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
+					/>
 				</svg>
 			</div>
 			<div class="space-y-1">
 				<div class="font-bold text-neutral-900">Prinsip Keamanan Hak Akses Peran (PBAC)</div>
-				<p class="text-neutral-600 leading-relaxed">
-					Peran <strong>Owner</strong> dan <strong>Super Administrator</strong> memiliki wewenang <em>bypass</em> sistem penuh ke seluruh modul secara otomatis demi menjaga stabilitas instalasi.
-					Perubahan centang izin di bawah ini berlaku langsung untuk akun dengan peran <strong>Admin</strong>, <strong>Gudang</strong>, dan <strong>Kasir</strong> seketika setelah disimpan (in-memory cached O(1)).
+				<p class="leading-relaxed text-neutral-600">
+					Peran <strong>Owner</strong> dan <strong>Super Administrator</strong> memiliki wewenang
+					<em>bypass</em>
+					sistem penuh ke seluruh modul secara otomatis demi menjaga stabilitas instalasi. Perubahan centang
+					izin di bawah ini berlaku langsung untuk akun dengan peran <strong>Admin</strong>,
+					<strong>Gudang</strong>, dan <strong>Kasir</strong> seketika setelah disimpan (in-memory cached
+					O(1)).
 				</p>
 			</div>
 		</div>
@@ -314,49 +328,61 @@
 	{/if}
 
 	<!-- Filter & Search Toolbar -->
-	<div class="flex flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-3.5 shadow-2xs sm:flex-row sm:items-center sm:justify-between">
+	<div
+		class="flex flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-3.5 shadow-2xs sm:flex-row sm:items-center sm:justify-between"
+	>
 		<!-- Quick Filter Modul Pills -->
 		<div class="flex flex-wrap items-center gap-1.5">
 			<button
 				type="button"
-				onclick={() => { selectedModuleFilter = 'all'; }}
-				class="inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors {selectedModuleFilter === 'all'
+				onclick={() => {
+					selectedModuleFilter = 'all';
+				}}
+				class="inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium transition-colors {selectedModuleFilter ===
+				'all'
 					? 'border-neutral-900 bg-neutral-900 text-white shadow-2xs'
-					: 'border-neutral-200 bg-white text-neutral-700 hover:border-neutral-300 hover:bg-neutral-50 shadow-2xs'}"
+					: 'border-neutral-200 bg-white text-neutral-700 shadow-2xs hover:border-neutral-300 hover:bg-neutral-50'}"
 			>
 				Semua Modul ({permissions.length})
 			</button>
 
-			{#each availableModules as mod}
+			{#each availableModules as mod (mod)}
 				<button
 					type="button"
-					onclick={() => { selectedModuleFilter = mod; }}
-					class="inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium capitalize transition-colors {selectedModuleFilter === mod
+					onclick={() => {
+						selectedModuleFilter = mod;
+					}}
+					class="inline-flex items-center rounded-full border px-3 py-1.5 text-xs font-medium capitalize transition-colors {selectedModuleFilter ===
+					mod
 						? 'border-neutral-900 bg-neutral-900 text-white shadow-2xs'
-						: 'border-neutral-200 bg-white text-neutral-700 hover:border-neutral-300 hover:bg-neutral-50 shadow-2xs'}"
+						: 'border-neutral-200 bg-white text-neutral-700 shadow-2xs hover:border-neutral-300 hover:bg-neutral-50'}"
 				>
 					{mod}
 				</button>
 			{/each}
 		</div>
 
-		<!-- Search Input -->
+		<!-- Search Input (Compact) -->
 		<div class="w-full sm:w-64">
-			<SearchInput
-				bind:value={searchQuery}
-				placeholder="Cari izin atau aksi..."
-			/>
+			<SearchInput size="sm" bind:value={searchQuery} placeholder="Cari izin atau aksi..." />
 		</div>
 	</div>
 
 	<!-- Matriks Tabel PBAC -->
 	<div class="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xs">
-		<Table empty={filteredPermissions.length === 0} emptyMessage={loading ? 'Memuat matriks otorisasi...' : 'Tidak ada izin yang sesuai dengan pencarian.'}>
+		<Table
+			empty={filteredPermissions.length === 0}
+			emptyMessage={loading
+				? 'Memuat matriks otorisasi...'
+				: 'Tidak ada izin yang sesuai dengan pencarian.'}
+		>
 			<thead>
-				<tr class="border-b border-neutral-200 bg-neutral-50/80 text-left text-2xs font-semibold tracking-wider text-neutral-600 uppercase">
-					<th class="px-4 py-3 min-w-[280px]">Kapabilitas Izin (Resource & Aksi)</th>
+				<tr
+					class="text-2xs border-b border-neutral-200 bg-neutral-50/80 text-left font-semibold tracking-wider text-neutral-600 uppercase"
+				>
+					<th class="min-w-[280px] px-4 py-3">Kapabilitas Izin (Resource & Aksi)</th>
 					{#each configurableRoles as r (r.name)}
-						<th class="px-4 py-3 text-center min-w-[130px]">
+						<th class="min-w-[130px] px-4 py-3 text-center">
 							<div class="flex flex-col items-center gap-1">
 								<span class="font-bold text-neutral-900">{r.display_name}</span>
 								{#if isRoleDirty(r.name)}
@@ -364,7 +390,7 @@
 										type="button"
 										disabled={saving}
 										onclick={() => saveRolePermissions(r.name)}
-										class="rounded bg-primary-600 px-2 py-0.5 text-[9.5px] font-semibold text-white transition-opacity hover:opacity-90 shadow-2xs"
+										class="rounded bg-primary-600 px-2 py-0.5 text-[9.5px] font-semibold text-white shadow-2xs transition-opacity hover:opacity-90"
 										title="Simpan perubahan peran ini"
 									>
 										Simpan
@@ -373,15 +399,18 @@
 							</div>
 						</th>
 					{/each}
-					<th class="px-4 py-3 text-center min-w-[120px] bg-neutral-100/50">Superadmin</th>
-					<th class="px-4 py-3 text-center min-w-[100px] bg-neutral-100/50">Owner</th>
+					<th class="min-w-[120px] bg-neutral-100/50 px-4 py-3 text-center">Superadmin</th>
+					<th class="min-w-[100px] bg-neutral-100/50 px-4 py-3 text-center">Owner</th>
 				</tr>
 			</thead>
 			<tbody class="divide-y divide-neutral-100 text-xs">
 				{#each Object.entries(groupedPermissions) as [mod, perms] (mod)}
 					<!-- Header Grup Modul -->
-					<tr class="bg-neutral-100/70 border-y border-neutral-200">
-						<td colspan={configurableRoles.length + 3} class="px-4 py-2 font-bold tracking-wider text-neutral-800 uppercase text-2xs">
+					<tr class="border-y border-neutral-200 bg-neutral-100/70">
+						<td
+							colspan={configurableRoles.length + 3}
+							class="text-2xs px-4 py-2 font-bold tracking-wider text-neutral-800 uppercase"
+						>
 							<div class="flex items-center gap-2">
 								<span class="h-2 w-2 rounded-full bg-neutral-900"></span>
 								{formatModuleName(mod)}
@@ -392,18 +421,24 @@
 
 					<!-- Baris Izin Granular -->
 					{#each perms as p (p.name)}
-						<tr class="transition-colors hover:bg-neutral-50/60 {p.name === 'inventory.stocks.adjust' ? 'bg-amber-50/30' : ''}">
+						<tr
+							class="transition-colors hover:bg-neutral-50/60 {p.name === 'inventory.stocks.adjust'
+								? 'bg-amber-50/30'
+								: ''}"
+						>
 							<!-- Info Izin -->
 							<td class="px-4 py-2.5">
-								<div class="font-mono text-2xs font-semibold text-neutral-900">
+								<div class="text-2xs font-mono font-semibold text-neutral-900">
 									{p.name}
 									{#if p.name === 'inventory.stocks.adjust'}
-										<span class="ml-1.5 rounded bg-amber-100 px-1.5 py-0.2 text-[9px] font-bold text-amber-800 border border-amber-200">
+										<span
+											class="py-0.2 ml-1.5 rounded border border-amber-200 bg-amber-100 px-1.5 text-[9px] font-bold text-amber-800"
+										>
 											Stock Opname
 										</span>
 									{/if}
 								</div>
-								<div class="mt-0.5 text-2xs text-neutral-500 line-clamp-1">{p.description}</div>
+								<div class="text-2xs mt-0.5 line-clamp-1 text-neutral-500">{p.description}</div>
 							</td>
 
 							<!-- Checkbox per Configurable Role -->
@@ -415,19 +450,19 @@
 											type="checkbox"
 											{checked}
 											onchange={() => togglePermission(r.name, p.name)}
-											class="h-4 w-4 rounded border-neutral-300 text-neutral-900 focus:ring-neutral-900 focus:ring-offset-0 transition-colors cursor-pointer"
+											class="h-4 w-4 cursor-pointer rounded border-neutral-300 text-neutral-900 transition-colors focus:ring-neutral-900 focus:ring-offset-0"
 										/>
 									</label>
 								</td>
 							{/each}
 
 							<!-- Superadmin Bypass Badge -->
-							<td class="px-4 py-2.5 text-center bg-neutral-100/30">
+							<td class="bg-neutral-100/30 px-4 py-2.5 text-center">
 								<Badge variant="primary" size="sm">Bypass</Badge>
 							</td>
 
 							<!-- Owner Bypass Badge -->
-							<td class="px-4 py-2.5 text-center bg-neutral-100/30">
+							<td class="bg-neutral-100/30 px-4 py-2.5 text-center">
 								<Badge variant="primary" size="sm">Bypass</Badge>
 							</td>
 						</tr>

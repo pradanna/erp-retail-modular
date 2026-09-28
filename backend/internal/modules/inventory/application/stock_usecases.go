@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/erp-retail/backend/internal/modules/inventory/domain"
 	"github.com/erp-retail/backend/internal/shared/event"
@@ -18,6 +19,7 @@ var (
 type AdjustStockCommand struct {
 	ProductID      string
 	LocationID     string
+	AdjustmentDate time.Time
 	NewQuantity    int
 	Reason         string
 	AdjustedBy     string
@@ -100,10 +102,15 @@ func (uc *AdjustStockUseCase) Execute(ctx context.Context, cmd AdjustStockComman
 	}
 
 	if uc.adjustmentRepo != nil {
+		adjDate := cmd.AdjustmentDate
+		if adjDate.IsZero() {
+			adjDate = time.Now()
+		}
 		adjustment, err := domain.NewStockAdjustment(
 			adjID,
 			cmd.ProductID,
 			cmd.LocationID,
+			adjDate,
 			previousQty,
 			cmd.NewQuantity,
 			reason,

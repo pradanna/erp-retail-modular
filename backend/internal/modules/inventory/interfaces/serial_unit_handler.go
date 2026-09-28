@@ -8,6 +8,7 @@ import (
 
 	"github.com/erp-retail/backend/internal/modules/inventory/application"
 	"github.com/erp-retail/backend/internal/modules/inventory/domain"
+	"github.com/erp-retail/backend/internal/shared/auth"
 )
 
 // SerialUnitHandler menangani request HTTP untuk registrasi, lookup, dan mutasi unit fisik berserial.
@@ -49,6 +50,15 @@ func (h *SerialUnitHandler) Register(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "body request tidak valid: " + err.Error()})
 		return
+	}
+
+	if claims := auth.GetClaims(r); claims != nil {
+		if (claims.Role == "warehouse" || claims.Role == "cashier") && claims.Location != "" {
+			if req.LocationID != claims.Location {
+				writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "akses ditolak: Anda hanya diizinkan mendaftarkan serial di gudang yang ditugaskan kepada Anda"})
+				return
+			}
+		}
 	}
 
 	cmd := application.RegisterSerialUnitsCommand{
@@ -97,8 +107,15 @@ func (h *SerialUnitHandler) List(w http.ResponseWriter, r *http.Request) {
 		productID = &pid
 	}
 	var locationID *string
-	if lid := r.URL.Query().Get("location_id"); lid != "" {
-		locationID = &lid
+	if claims := auth.GetClaims(r); claims != nil {
+		if (claims.Role == "warehouse" || claims.Role == "cashier") && claims.Location != "" {
+			locationID = &claims.Location
+		}
+	}
+	if locationID == nil {
+		if lid := r.URL.Query().Get("location_id"); lid != "" {
+			locationID = &lid
+		}
 	}
 	var statusFilter *domain.SerialStatus
 	if s := r.URL.Query().Get("status"); s != "" {

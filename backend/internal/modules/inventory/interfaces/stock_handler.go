@@ -62,11 +62,27 @@ func (h *StockHandler) Adjust(w http.ResponseWriter, r *http.Request) {
 		} else if claims.Role != "" {
 			adjustedByName = "Admin (" + claims.Role + ")"
 		}
+
+		// Validasi isolasi cabang: admin gudang & kasir hanya boleh opname di gudang penugasannya
+		if (claims.Role == "warehouse" || claims.Role == "cashier") && claims.Location != "" {
+			if req.LocationID != claims.Location {
+				writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "akses ditolak: Anda hanya diizinkan menyesuaikan stok di gudang yang ditugaskan kepada Anda"})
+				return
+			}
+		}
+	}
+
+	adjDate := time.Now()
+	if req.AdjustmentDate != "" {
+		if parsed, err := time.Parse("2006-01-02", req.AdjustmentDate); err == nil {
+			adjDate = parsed
+		}
 	}
 
 	cmd := application.AdjustStockCommand{
 		ProductID:      req.ProductID,
 		LocationID:     req.LocationID,
+		AdjustmentDate: adjDate,
 		NewQuantity:    req.NewQuantity,
 		Reason:         req.Reason,
 		AdjustedBy:     adjustedBy,
@@ -104,6 +120,15 @@ func (h *StockHandler) UpdateMinStock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if claims := auth.GetClaims(r); claims != nil {
+		if (claims.Role == "warehouse" || claims.Role == "cashier") && claims.Location != "" {
+			if req.LocationID != claims.Location {
+				writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "akses ditolak: Anda hanya diizinkan mengubah batas minimum stok di gudang yang ditugaskan kepada Anda"})
+				return
+			}
+		}
+	}
+
 	cmd := application.UpdateMinStockCommand{
 		ProductID:  req.ProductID,
 		LocationID: req.LocationID,
@@ -136,6 +161,17 @@ func (h *StockHandler) UpdateMinStock(w http.ResponseWriter, r *http.Request) {
 func (h *StockHandler) Get(w http.ResponseWriter, r *http.Request) {
 	productID := r.URL.Query().Get("product_id")
 	locationID := r.URL.Query().Get("location_id")
+
+	// Validasi isolasi cabang: admin gudang & kasir hanya boleh melihat stok di gudang penugasannya
+	if claims := auth.GetClaims(r); claims != nil {
+		if (claims.Role == "warehouse" || claims.Role == "cashier") && claims.Location != "" {
+			if locationID != "" && locationID != claims.Location {
+				writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "akses ditolak: Anda hanya diizinkan melihat stok di gudang yang ditugaskan kepada Anda"})
+				return
+			}
+			locationID = claims.Location
+		}
+	}
 
 	if locationID == "" {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "parameter query 'location_id' wajib diisi"})
@@ -178,6 +214,11 @@ func (h *StockHandler) Get(w http.ResponseWriter, r *http.Request) {
 // Endpoint: GET /api/v1/inventory/stocks/alerts?location_id=...
 func (h *StockHandler) ListAlerts(w http.ResponseWriter, r *http.Request) {
 	locParam := r.URL.Query().Get("location_id")
+	if claims := auth.GetClaims(r); claims != nil {
+		if (claims.Role == "warehouse" || claims.Role == "cashier") && claims.Location != "" {
+			locParam = claims.Location
+		}
+	}
 	var locPtr *string
 	if locParam != "" {
 		locPtr = &locParam
@@ -214,8 +255,16 @@ func (h *StockHandler) ListAdjustments(w http.ResponseWriter, r *http.Request) {
 	filter := domain.StockAdjustmentFilter{
 		LocationID: q.Get("location_id"),
 		ProductID:  q.Get("product_id"),
+		StartDate:  q.Get("start_date"),
+		EndDate:    q.Get("end_date"),
 		Page:       page,
 		Limit:      limit,
+	}
+
+	if claims := auth.GetClaims(r); claims != nil {
+		if (claims.Role == "warehouse" || claims.Role == "cashier") && claims.Location != "" {
+			filter.LocationID = claims.Location
+		}
 	}
 
 	items, total, err := h.listAdjustmentsUC.Execute(r.Context(), filter)
@@ -227,6 +276,10 @@ func (h *StockHandler) ListAdjustments(w http.ResponseWriter, r *http.Request) {
 
 	res := make([]StockAdjustmentResponse, len(items))
 	for i, it := range items {
+		adjDateStr := it.AdjustmentDate.Format("2006-01-02")
+		if it.AdjustmentDate.IsZero() {
+			adjDateStr = it.CreatedAt.Format("2006-01-02")
+		}
 		res[i] = StockAdjustmentResponse{
 			ID:               it.ID,
 			ProductID:        it.ProductID,
@@ -234,6 +287,7 @@ func (h *StockHandler) ListAdjustments(w http.ResponseWriter, r *http.Request) {
 			ProductSKU:       it.ProductSKU,
 			LocationID:       it.LocationID,
 			LocationName:     it.LocationName,
+			AdjustmentDate:   adjDateStr,
 			PreviousQuantity: it.PreviousQuantity,
 			NewQuantity:      it.NewQuantity,
 			Difference:       it.Difference,

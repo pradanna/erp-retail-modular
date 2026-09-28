@@ -18,6 +18,7 @@ type StockAdjustment struct {
 	ProductSKU       string    // SKU produk (denormalisasi/join)
 	LocationID       string    // ID lokasi/cabang
 	LocationName     string    // Nama lokasi (denormalisasi/join)
+	AdjustmentDate   time.Time // Tanggal fisik pelaksanaan stock opname
 	PreviousQuantity int       // Jumlah fisik sebelum opname
 	NewQuantity      int       // Jumlah fisik sesudah opname
 	Difference       int       // Selisih (NewQuantity - PreviousQuantity)
@@ -31,6 +32,7 @@ type StockAdjustment struct {
 func NewStockAdjustment(
 	id string,
 	productID, locationID string,
+	adjustmentDate time.Time,
 	previousQty, newQty int,
 	reason string,
 	adjustedBy, adjustedByName string,
@@ -50,11 +52,15 @@ func NewStockAdjustment(
 	if adjustedByName == "" {
 		adjustedByName = "Staf Toko"
 	}
+	if adjustmentDate.IsZero() {
+		adjustmentDate = time.Now()
+	}
 
 	return &StockAdjustment{
 		ID:               id,
 		ProductID:        productID,
 		LocationID:       locationID,
+		AdjustmentDate:   adjustmentDate,
 		PreviousQuantity: previousQty,
 		NewQuantity:      newQty,
 		Difference:       newQty - previousQty,

@@ -14,7 +14,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { getUser, getToken, logout } from '$lib/stores/auth.svelte';
-	import { changePassword } from '@erp/api-client';
+	import { changePassword, getLocation } from '@erp/api-client';
 	import { ApiError, USER_ROLE_LABELS } from '@erp/types';
 	import { Button, Input, Modal, Alert, Badge } from '@erp/ui';
 
@@ -30,6 +30,42 @@
 	let dropdownOpen = $state(false);
 	let showProfileModal = $state(false);
 	let showPasswordModal = $state(false);
+
+	// State resolusi nama lokasi/cabang pengguna
+	let locationName = $state<string>('');
+
+	$effect(() => {
+		const locId = user?.location_id;
+		const currentToken = getToken();
+
+		if (!locId) {
+			locationName = '';
+			return;
+		}
+
+		if (typeof window !== 'undefined') {
+			const cached = sessionStorage.getItem(`loc_name_${locId}`);
+			if (cached) {
+				locationName = cached;
+				return;
+			}
+		}
+
+		if (currentToken) {
+			getLocation(currentToken, locId)
+				.then((loc) => {
+					if (loc?.name) {
+						locationName = loc.name;
+						if (typeof window !== 'undefined') {
+							sessionStorage.setItem(`loc_name_${locId}`, loc.name);
+						}
+					}
+				})
+				.catch(() => {
+					locationName = 'Cabang Toko';
+				});
+		}
+	});
 
 	// State untuk form ganti password
 	let oldPassword = $state('');
@@ -217,7 +253,11 @@
 				/>
 			</svg>
 			<span class="font-medium text-neutral-800">
-				{user?.location_id ? `Lokasi: ${user.location_id}` : 'Semua Cabang (Global)'}
+				{user?.location_id
+					? locationName
+						? `Lokasi: ${locationName}`
+						: 'Memuat lokasi...'
+					: 'Semua Cabang (Global)'}
 			</span>
 		</div>
 
@@ -447,7 +487,7 @@
 			<div class="flex items-center justify-between px-3.5 py-2.5 text-xs">
 				<span class="font-medium text-neutral-500">Penempatan Cabang</span>
 				<span class="font-semibold text-neutral-900">
-					{user?.location_id ? user.location_id : 'Semua Cabang (Global)'}
+					{user?.location_id ? (locationName || 'Memuat lokasi...') : 'Semua Cabang (Global)'}
 				</span>
 			</div>
 			<div class="flex items-center justify-between px-3.5 py-2.5 text-xs">

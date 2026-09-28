@@ -6,6 +6,7 @@ const (
 	EventOrderPaid       = "order.paid"
 	EventGoodsReceived   = "purchasing.goods_received"
 	EventStockAdjusted   = "inventory.stock_adjusted"
+	EventStockMoved      = "inventory.stock_moved"
 )
 
 // StockAdjustedPayload merepresentasikan payload saat penyesuaian fisik stok (Stock Opname) terjadi.
@@ -57,4 +58,18 @@ type GoodsReceivedItem struct {
 	ProductID       string
 	Quantity        int
 	PurchasePriceID string // referensi ke harga beli saat PO dibuat
+}
+
+// StockMovedPayload adalah payload event saat transaksi Barang Masuk atau Keluar dieksekusi.
+type StockMovedPayload struct {
+	MovementID      string
+	MovementNumber  string
+	Type            string // "in" / "out"
+	LocationID      string
+	LocationName    string
+	CategoryReason  string
+	ReferenceNumber string
+	TotalItems      int
+	ExecutedBy      string
+	ExecutedByName  string
 }

@@ -21,8 +21,13 @@ func NewStockAdjustmentRepository(db *sql.DB) domain.StockAdjustmentRepository {
 func (r *mysqlStockAdjustmentRepository) Save(ctx context.Context, adj *domain.StockAdjustment) error {
 	query := `
 		INSERT INTO inv_stock_adjustments (
-			id, product_id, location_id, previous_quantity, new_quantity, difference, reason, adjusted_by, adjusted_by_name, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			id, product_id, location_id, adjustment_date, previous_quantity, new_quantity, difference, reason, adjusted_by, adjusted_by_name, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	adjDate := adj.AdjustmentDate
+	if adjDate.IsZero() {
+		adjDate = adj.CreatedAt
+	}
 
 	_, err := r.db.ExecContext(
 		ctx,
@@ -30,6 +35,7 @@ func (r *mysqlStockAdjustmentRepository) Save(ctx context.Context, adj *domain.S
 		adj.ID,
 		adj.ProductID,
 		adj.LocationID,
+		adjDate.Format("2006-01-02"),
 		adj.PreviousQuantity,
 		adj.NewQuantity,
 		adj.Difference,
@@ -56,6 +62,14 @@ func (r *mysqlStockAdjustmentRepository) List(ctx context.Context, filter domain
 	if filter.ProductID != "" {
 		whereConditions = append(whereConditions, "a.product_id = ?")
 		args = append(args, filter.ProductID)
+	}
+	if filter.StartDate != "" {
+		whereConditions = append(whereConditions, "a.adjustment_date >= ?")
+		args = append(args, filter.StartDate)
+	}
+	if filter.EndDate != "" {
+		whereConditions = append(whereConditions, "a.adjustment_date <= ?")
+		args = append(args, filter.EndDate)
 	}
 
 	whereClause := ""
@@ -84,14 +98,14 @@ func (r *mysqlStockAdjustmentRepository) List(ctx context.Context, filter domain
 	query := fmt.Sprintf(`
 		SELECT 
 			a.id, a.product_id, COALESCE(p.name, ''), COALESCE(p.sku, ''),
-			a.location_id, COALESCE(l.name, ''),
+			a.location_id, COALESCE(l.name, ''), a.adjustment_date,
 			a.previous_quantity, a.new_quantity, a.difference,
 			a.reason, a.adjusted_by, a.adjusted_by_name, a.created_at
 		FROM inv_stock_adjustments a
 		LEFT JOIN inv_products p ON p.id = a.product_id
 		LEFT JOIN inv_locations l ON l.id = a.location_id
 		%s
-		ORDER BY a.created_at DESC
+		ORDER BY a.adjustment_date DESC, a.created_at DESC
 		LIMIT ? OFFSET ?`, whereClause)
 
 	queryArgs := append(args, limit, offset)
@@ -111,6 +125,7 @@ func (r *mysqlStockAdjustmentRepository) List(ctx context.Context, filter domain
 			&item.ProductSKU,
 			&item.LocationID,
 			&item.LocationName,
+			&item.AdjustmentDate,
 			&item.PreviousQuantity,
 			&item.NewQuantity,
 			&item.Difference,

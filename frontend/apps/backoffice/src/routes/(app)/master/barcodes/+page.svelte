@@ -33,8 +33,8 @@
 		SearchInput,
 		Barcode,
 		ActionMenu,
-		type ActionMenuItem,
-		toast
+		toast,
+		generateCode128Svg
 	} from '@erp/ui';
 
 	// State produk & barcode
@@ -237,8 +237,17 @@
 			return;
 		}
 
-		const previewSvg = document.querySelector('#barcode-preview-container svg')?.outerHTML || '';
 		const isThermal = printFormat === 'single';
+
+		// Generate SVG barcode presisi tinggi sesuai format media cetak:
+		// - Thermal Roll: 50x35mm
+		// - Kertas HVS A4: Barcode diperbesar dengan tinggi bar 100 & modul 2.0 agar tidak blur/bleeding di serat kertas HVS dan mudah discan
+		const barcodeSvg = generateCode128Svg(printTargetBarcode.barcode, {
+			height: isThermal ? 65 : 100,
+			moduleWidth: isThermal ? 1.8 : 2.0,
+			fontSize: isThermal ? 11 : 13,
+			showText: true
+		});
 
 		let labelsHtml = '';
 		for (let i = 0; i < copies; i++) {
@@ -246,7 +255,7 @@
 				<div class="label-card">
 					${printIncludeStoreName ? `<div class="store-name">${storeName}</div>` : ''}
 					${printIncludeProductName ? `<div class="product-name">${productName}</div>` : ''}
-					<div class="barcode-wrapper">${previewSvg}</div>
+					<div class="barcode-wrapper">${barcodeSvg}</div>
 					${printIncludePrice ? `<div class="price">${priceFormatted}</div>` : ''}
 				</div>
 			`;
@@ -263,65 +272,77 @@
 					body {
 						font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 						background: white;
-						color: #000;
-						padding: ${isThermal ? '0' : '8mm'};
+						color: #000000;
+						padding: ${isThermal ? '0' : '8mm 5mm'};
+						-webkit-print-color-adjust: exact;
+						print-color-adjust: exact;
 					}
 					@page {
 						size: ${isThermal ? '50mm 35mm' : 'A4 portrait'};
-						margin: ${isThermal ? '2mm' : '8mm'};
+						margin: ${isThermal ? '2mm' : '8mm 5mm'};
 					}
 					.container {
 						display: flex;
 						flex-wrap: wrap;
 						gap: ${isThermal ? '0' : '4mm'};
 						justify-content: ${isThermal ? 'center' : 'flex-start'};
+						align-content: flex-start;
 					}
 					.label-card {
-						width: 48mm;
-						height: 32mm;
-						padding: 2mm 3mm;
-						border: ${isThermal ? 'none' : '1px dashed #d1d5db'};
+						width: ${isThermal ? '48mm' : '64mm'};
+						height: ${isThermal ? '32mm' : '40mm'};
+						padding: ${isThermal ? '2mm 3mm' : '2.5mm 3.5mm'};
+						border: ${isThermal ? 'none' : '1px dashed #94a3b8'};
 						page-break-inside: avoid;
+						break-inside: avoid;
 						${isThermal ? 'page-break-after: always; break-after: page;' : ''}
 						display: flex;
 						flex-direction: column;
 						align-items: center;
-						justify-content: center;
+						justify-content: space-between;
 						text-align: center;
 						overflow: hidden;
+						background: #ffffff;
 					}
 					.store-name {
-						font-size: 8px;
+						font-size: ${isThermal ? '7.5px' : '8.5px'};
 						font-weight: 800;
 						letter-spacing: 1.5px;
 						text-transform: uppercase;
-						color: #404040;
-						margin-bottom: 0.8mm;
+						color: #000000;
+						line-height: 1;
+						margin-bottom: 0.5mm;
 					}
 					.product-name {
-						font-size: 9px;
+						font-size: ${isThermal ? '8.5px' : '10px'};
 						font-weight: 700;
 						line-height: 1.15;
-						max-height: 20px;
+						max-height: ${isThermal ? '18px' : '24px'};
 						overflow: hidden;
-						margin-bottom: 0.8mm;
+						color: #000000;
+						margin-bottom: 0.5mm;
 					}
 					.barcode-wrapper {
 						display: flex;
 						justify-content: center;
 						align-items: center;
 						width: 100%;
+						flex: 1;
 						margin: 0.5mm 0;
 					}
 					.barcode-wrapper svg {
-						max-width: 42mm;
-						max-height: 14mm;
+						max-width: ${isThermal ? '44mm' : '58mm'};
+						max-height: ${isThermal ? '16mm' : '23mm'};
+						min-height: ${isThermal ? '12mm' : '18mm'};
+						width: 100%;
 						height: auto;
 					}
 					.price {
-						font-size: 10px;
+						font-size: ${isThermal ? '9.5px' : '12px'};
 						font-weight: 800;
-						margin-top: 0.8mm;
+						color: #000000;
+						line-height: 1;
+						margin-top: 0.5mm;
 					}
 					@media screen {
 						body { background: #f3f4f6; padding: 20px; }
@@ -545,9 +566,10 @@
 						{/if}
 					</div>
 
-					<!-- Input Pencarian Produk -->
-					<div class="mt-3">
+					<!-- Input Pencarian Produk (Compact) -->
+					<div class="mt-2">
 						<SearchInput
+							size="sm"
 							bind:value={productSearchQuery}
 							placeholder="Cari nama, SKU, merek produk..."
 							debounceMs={150}
@@ -1054,21 +1076,23 @@
 						<span class="text-[11px] font-bold tracking-wider text-neutral-500 uppercase"
 							>Pratinjau Stiker</span
 						>
-						<span class="text-[11px] font-medium text-neutral-500">Ukuran ~50x35mm</span>
+						<span class="text-[11px] font-medium text-neutral-600">
+							{printFormat === 'single' ? 'Ukuran ~50x35mm (Thermal POS)' : 'Ukuran ~64x40mm (Lembar A4 HVS - 3 Kolom)'}
+						</span>
 					</div>
 
 					<!-- Kartu Stiker Barcode -->
 					<div
-						class="flex min-h-[160px] w-72 flex-col items-center justify-between rounded-xl border border-neutral-300 bg-white p-4 text-center shadow-xs"
+						class="flex flex-col items-center justify-between rounded-xl border border-neutral-300 bg-white p-4 text-center shadow-xs transition-all {printFormat === 'single' ? 'w-64 min-h-[160px]' : 'w-80 min-h-[190px]'}"
 					>
 						{#if printIncludeStoreName}
-							<div class="text-[10px] font-extrabold tracking-widest text-neutral-500 uppercase">
+							<div class="text-[10px] font-extrabold tracking-widest text-neutral-800 uppercase">
 								GEN-E RETAIL
 							</div>
 						{/if}
 
 						{#if printIncludeProductName}
-							<div class="mt-1 line-clamp-1 text-xs font-bold text-neutral-900">
+							<div class="mt-1 line-clamp-1 font-bold text-neutral-900 {printFormat === 'single' ? 'text-xs' : 'text-sm'}">
 								{currentProduct.name}
 							</div>
 						{/if}
@@ -1077,14 +1101,16 @@
 						<div id="barcode-preview-container" class="my-2 flex w-full justify-center">
 							<Barcode
 								value={printTargetBarcode.barcode}
-								height={42}
+								height={printFormat === 'single' ? 55 : 85}
+								moduleWidth={printFormat === 'single' ? 1.8 : 2.0}
 								showText={true}
-								class="max-w-[220px]"
+								fontSize={printFormat === 'single' ? 11 : 13}
+								class={printFormat === 'single' ? 'max-w-[220px]' : 'max-w-[270px]'}
 							/>
 						</div>
 
 						{#if printIncludePrice}
-							<div class="mt-1 text-xs font-extrabold text-neutral-900">
+							<div class="mt-1 font-extrabold text-neutral-900 {printFormat === 'single' ? 'text-xs' : 'text-sm'}">
 								{new Intl.NumberFormat('id-ID', {
 									style: 'currency',
 									currency: 'IDR',
@@ -1096,6 +1122,9 @@
 
 					<p class="mt-3 text-center text-xs text-neutral-500">
 						Total yang akan dicetak: <strong class="text-neutral-900">{printCopies} label</strong>
+						{#if printFormat === 'sheet'}
+							<span class="block text-[11px] text-neutral-500 mt-0.5">Format A4 HVS diperbesar (garis tinggi & tebal) agar terbaca jelas oleh pemindai barcode</span>
+						{/if}
 					</p>
 				</div>
 			</div>

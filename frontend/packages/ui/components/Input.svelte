@@ -16,7 +16,7 @@
 
   interface Props {
     label?: string;
-    type?: 'text' | 'password' | 'email' | 'number' | 'search';
+    type?: 'text' | 'password' | 'email' | 'number' | 'search' | 'date';
     placeholder?: string;
     value?: string | number;
     error?: string;
@@ -33,7 +33,10 @@
     showPasswordToggle?: boolean;
     thousandSeparator?: boolean;
     prefix?: string;
+    size?: 'sm' | 'md' | 'lg';
     onkeydown?: (e: KeyboardEvent) => void;
+    onchange?: (e: Event) => void;
+    oninput?: (e: Event) => void;
   }
 
   let {
@@ -55,8 +58,54 @@
     showPasswordToggle = false,
     thousandSeparator = false,
     prefix = '',
+    size = 'lg',
     onkeydown = undefined,
+    onchange = undefined,
+    oninput = undefined,
   }: Props = $props();
+
+  const sizeClasses: Record<
+    string,
+    {
+      height: string;
+      rounded: string;
+      text: string;
+      px: string;
+      leadingPl: string;
+      prefixPl: string;
+      togglePr: string;
+    }
+  > = {
+    sm: {
+      height: 'h-8',
+      rounded: 'rounded-lg',
+      text: 'text-xs',
+      px: 'px-2.5',
+      leadingPl: 'pl-8',
+      prefixPl: 'pl-8',
+      togglePr: 'pr-8',
+    },
+    md: {
+      height: 'h-10',
+      rounded: 'rounded-xl',
+      text: 'text-xs',
+      px: 'px-3',
+      leadingPl: 'pl-9.5',
+      prefixPl: 'pl-9',
+      togglePr: 'pr-9.5',
+    },
+    lg: {
+      height: 'h-12',
+      rounded: 'rounded-xl',
+      text: 'text-sm',
+      px: 'px-3.5',
+      leadingPl: 'pl-11',
+      prefixPl: 'pl-10',
+      togglePr: 'pr-11',
+    },
+  };
+
+  const currentSize = $derived(sizeClasses[size] ?? sizeClasses.lg);
 
   let passwordVisible = $state(false);
   let effectiveType = $derived(
@@ -121,9 +170,14 @@
   }
 </script>
 
-<div class="flex flex-col gap-1.5">
+<div class="flex flex-col {size === 'sm' ? 'gap-1' : 'gap-1.5'}">
   {#if label}
-    <label for={id} class="text-sm font-medium text-neutral-800">
+    <label
+      for={id}
+      class="{size === 'sm'
+        ? 'text-2xs font-medium text-neutral-600'
+        : 'text-sm font-medium text-neutral-800'}"
+    >
       {label}
       {#if required && showRequiredAsterisk}
         <span class="text-danger-500">*</span>
@@ -134,13 +188,17 @@
   <div class="relative flex items-center">
     {#if prefix}
       <span
-        class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-xs font-bold text-neutral-400 select-none"
+        class="pointer-events-none absolute inset-y-0 left-0 flex items-center {size === 'sm'
+          ? 'pl-2.5'
+          : 'pl-3.5'} text-xs font-bold text-neutral-400 select-none"
       >
         {prefix}
       </span>
     {:else if leadingIcon}
       <div
-        class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3.5 text-neutral-400"
+        class="pointer-events-none absolute inset-y-0 left-0 flex items-center {size === 'sm'
+          ? 'pl-2.5'
+          : 'pl-3.5'} text-neutral-400"
       >
         {@render leadingIcon()}
       </div>
@@ -160,13 +218,13 @@
         value={formatThousands(value)}
         oninput={handleThousandsInput}
         onfocus={handleThousandsFocus}
-        class="h-12 w-full rounded-xl border bg-white font-mono text-sm text-neutral-900
+        class="{currentSize.height} {currentSize.rounded} {currentSize.text} {currentSize.px} w-full border bg-white font-mono text-neutral-900
           shadow-xs transition-all duration-150
           placeholder:text-neutral-400
           focus:ring-4 focus:outline-none
           disabled:cursor-not-allowed disabled:bg-neutral-50 disabled:text-neutral-400
-          {prefix ? 'pl-10' : leadingIcon ? 'pl-11' : 'pl-3.5'}
-          pr-3.5
+          {prefix ? currentSize.prefixPl : leadingIcon ? currentSize.leadingPl : currentSize.px}
+          {currentSize.px}
           {error
           ? 'border-danger-400 focus:border-danger-500 focus:ring-danger-500/10'
           : 'focus:border-primary-500 focus:ring-primary-500/10 border-neutral-200 hover:border-neutral-300'}"
@@ -184,14 +242,16 @@
         {max}
         {step}
         {onkeydown}
+        {onchange}
+        {oninput}
         bind:value
-        class="h-12 w-full rounded-xl border bg-white px-3.5 text-sm text-neutral-900 shadow-xs
+        class="{currentSize.height} {currentSize.rounded} {currentSize.text} {currentSize.px} w-full border bg-white text-neutral-900 shadow-xs
           transition-all duration-150
           placeholder:text-neutral-400
           focus:ring-4 focus:outline-none
           disabled:cursor-not-allowed disabled:bg-neutral-50 disabled:text-neutral-400
-          {prefix ? 'pl-10' : leadingIcon ? 'pl-11' : 'pl-3.5'}
-          {type === 'password' || showPasswordToggle ? 'pr-11' : 'pr-3.5'}
+          {prefix ? currentSize.prefixPl : leadingIcon ? currentSize.leadingPl : currentSize.px}
+          {type === 'password' || showPasswordToggle ? currentSize.togglePr : currentSize.px}
           {error
           ? 'border-danger-400 focus:border-danger-500 focus:ring-danger-500/10'
           : 'focus:border-primary-500 focus:ring-primary-500/10 border-neutral-200 hover:border-neutral-300'}"
@@ -203,13 +263,13 @@
         type="button"
         tabindex="-1"
         onclick={() => (passwordVisible = !passwordVisible)}
-        class="absolute inset-y-0 right-0 flex items-center pr-3.5 text-neutral-400 transition-colors hover:text-neutral-600 focus:outline-none"
+        class="absolute inset-y-0 right-0 flex items-center {currentSize.togglePr} text-neutral-400 transition-colors hover:text-neutral-600 focus:outline-none"
         aria-label={passwordVisible ? 'Sembunyikan password' : 'Lihat password'}
       >
         {#if passwordVisible}
           <!-- Heroicons EyeSlash 20x20 -->
           <svg
-            class="h-5 w-5"
+            class="{size === 'sm' ? 'h-4 w-4' : 'h-5 w-5'}"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -224,7 +284,7 @@
         {:else}
           <!-- Heroicons Eye 20x20 -->
           <svg
-            class="h-5 w-5"
+            class="{size === 'sm' ? 'h-4 w-4' : 'h-5 w-5'}"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"

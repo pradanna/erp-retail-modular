@@ -24,6 +24,7 @@
     disabled?: boolean;
     type?: 'button' | 'submit' | 'reset';
     form?: string;
+    title?: string;
     fullWidth?: boolean;
     onclick?: (e: MouseEvent) => void;
     children: Snippet;
@@ -36,6 +37,7 @@
     disabled = false,
     type = 'button',
     form,
+    title,
     fullWidth = false,
     onclick,
     children,
@@ -65,6 +67,7 @@
 <button
   {type}
   {form}
+  {title}
   {onclick}
   disabled={disabled || loading}
   class="inline-flex items-center justify-center gap-2 rounded-xl font-medium

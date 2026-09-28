@@ -205,6 +205,7 @@ export interface LocationResponse {
 export interface AdjustStockRequest {
   product_id: string;
   location_id: string;
+  adjustment_date?: string | undefined;
   new_quantity: number;
   reason?: string | undefined;
 }
@@ -234,6 +235,7 @@ export interface StockAdjustmentResponse {
   product_sku: string;
   location_id: string;
   location_name: string;
+  adjustment_date: string;
   previous_quantity: number;
   new_quantity: number;
   difference: number;
@@ -246,6 +248,8 @@ export interface StockAdjustmentResponse {
 export interface StockAdjustmentListParams {
   location_id?: string | undefined;
   product_id?: string | undefined;
+  start_date?: string | undefined;
+  end_date?: string | undefined;
   page?: number | undefined;
   limit?: number | undefined;
 }
@@ -435,3 +439,102 @@ export interface ProductWarrantyResponse {
   created_at: string;
   updated_at: string;
 }
+
+// ── Stock Movement (Barang Masuk & Keluar) DTOs ────────────────────────────
+
+export type StockMovementType = 'in' | 'out';
+
+export interface CreateStockMovementItemRequest {
+  product_id: string;
+  quantity: number;
+  notes?: string | undefined;
+  serial_numbers?: string[] | undefined;
+}
+
+export interface CreateStockMovementRequest {
+  movement_date?: string | undefined;
+  location_id: string;
+  category_reason: string;
+  reference_number?: string | undefined;
+  notes?: string | undefined;
+  items: CreateStockMovementItemRequest[];
+}
+
+export interface StockMovementItemResponse {
+  id: string;
+  product_id: string;
+  product_name: string;
+  product_sku: string;
+  quantity: number;
+  notes: string;
+  serial_numbers?: string[] | undefined;
+  created_at: string;
+}
+
+export interface StockMovementResponse {
+  id: string;
+  movement_number: string;
+  type: StockMovementType;
+  movement_date: string;
+  location_id: string;
+  location_name: string;
+  category_reason: string;
+  reference_number: string;
+  notes: string;
+  executed_by: string;
+  executed_by_name: string;
+  items: StockMovementItemResponse[];
+  created_at: string;
+}
+
+export interface StockMovementListParams {
+  location_id?: string | undefined;
+  type?: StockMovementType | undefined;
+  start_date?: string | undefined;
+  end_date?: string | undefined;
+  page?: number | undefined;
+  limit?: number | undefined;
+}
+
+// ── Stock Card & Valuation Report DTOs ─────────────────────────────────────
+
+export interface StockCardEntryResponse {
+  date: string;
+  movement_type: 'stock_in' | 'stock_out' | 'opname' | 'transfer_in' | 'transfer_out';
+  document_number: string;
+  reference_number: string;
+  category_reason: string;
+  in_quantity: number;
+  out_quantity: number;
+  balance: number;
+  executed_by_name: string;
+  notes: string;
+}
+
+export interface StockCardReportResponse {
+  product_id: string;
+  product_name: string;
+  product_sku: string;
+  location_id: string;
+  location_name: string;
+  opening_balance: number;
+  total_in: number;
+  total_out: number;
+  closing_balance: number;
+  entries: StockCardEntryResponse[];
+}
+
+export interface StockValuationItemResponse {
+  product_id: string;
+  product_sku: string;
+  product_name: string;
+  category_name: string;
+  location_id: string;
+  location_name: string;
+  quantity: number;
+  min_stock: number;
+  base_price: number;
+  total_valuation: number;
+  status: 'aman' | 'menipis' | 'habis';
+}
+

@@ -132,28 +132,44 @@
 				Log Audit & Jejak Aktivitas
 			</h1>
 			<p class="text-xs text-neutral-500 sm:text-sm">
-				Rekam jejak seluruh aksi penting yang dilakukan staf dan admin untuk memastikan akuntabilitas operasional toko.
+				Rekam jejak seluruh aksi penting yang dilakukan staf dan admin untuk memastikan
+				akuntabilitas operasional toko.
 			</p>
 		</div>
 
-		<Button variant="outline" size="sm" onclick={() => loadLogs(currentPage)} loading={loading}>
+		<Button variant="outline" size="sm" onclick={() => loadLogs(currentPage)} {loading}>
 			<!-- Refresh Icon -->
-			<svg class="h-4 w-4 text-neutral-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.75">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+			<svg
+				class="h-4 w-4 text-neutral-500"
+				fill="none"
+				viewBox="0 0 24 24"
+				stroke="currentColor"
+				stroke-width="1.75"
+			>
+				<path
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"
+				/>
 			</svg>
 			Segarkan Log
 		</Button>
 	</div>
 
 	<!-- Toolbar Filter -->
-	<div class="flex flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-3.5 shadow-2xs sm:flex-row sm:items-center sm:justify-between">
+	<div
+		class="flex flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-3.5 shadow-2xs sm:flex-row sm:items-center sm:justify-between"
+	>
 		<div class="flex flex-wrap items-center gap-3">
 			<div class="w-full sm:w-60">
 				<Select2
 					options={moduleFilterOptions}
 					value={selectedModule}
 					placeholder="Semua Modul"
-					onchange={(val) => { selectedModule = String(val); loadLogs(1); }}
+					onchange={(val) => {
+						selectedModule = String(val);
+						loadLogs(1);
+					}}
 				/>
 			</div>
 
@@ -180,7 +196,12 @@
 			<Button
 				variant="outline"
 				size="sm"
-				onclick={() => { selectedModule = ''; startDate = ''; endDate = ''; loadLogs(1); }}
+				onclick={() => {
+					selectedModule = '';
+					startDate = '';
+					endDate = '';
+					loadLogs(1);
+				}}
 			>
 				Reset Filter
 			</Button>
@@ -189,38 +210,48 @@
 
 	<!-- Tabel Log Audit -->
 	<div class="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xs">
-		<Table empty={logs.length === 0} emptyMessage={loading ? 'Memuat log audit sistem...' : 'Tidak ada aktivitas tercatat yang sesuai filter.'}>
+		<Table
+			borderless
+			empty={logs.length === 0}
+			emptyMessage={loading
+				? 'Memuat log audit sistem...'
+				: 'Tidak ada aktivitas tercatat yang sesuai filter.'}
+		>
 			<thead>
-				<tr class="border-b border-neutral-200 bg-neutral-50/80 text-left text-2xs font-semibold tracking-wider text-neutral-600 uppercase">
-					<th class="px-4 py-3">Waktu</th>
-					<th class="px-4 py-3">Pengguna / Staf</th>
-					<th class="px-4 py-3">Modul & Aksi</th>
-					<th class="px-4 py-3">Ringkasan Aktivitas</th>
-					<th class="px-4 py-3 text-right">Rincian</th>
+				<tr
+					class="border-b border-neutral-200 bg-neutral-50/75 text-left text-xs font-semibold text-neutral-600"
+				>
+					<th class="px-5 py-3.5">Waktu</th>
+					<th class="px-5 py-3.5">Pengguna / Staf</th>
+					<th class="px-5 py-3.5">Modul & Aksi</th>
+					<th class="px-5 py-3.5">Ringkasan Aktivitas</th>
+					<th class="px-5 py-3.5 text-right">Rincian</th>
 				</tr>
 			</thead>
-			<tbody class="divide-y divide-neutral-100">
-				{#each logs as logItem}
-					<tr class="hover:bg-neutral-50/60 transition-colors">
-						<td class="px-4 py-3 text-2xs text-neutral-500 whitespace-nowrap font-mono">
+			<tbody class="divide-y divide-neutral-200 bg-white text-xs">
+				{#each logs as logItem (logItem.id)}
+					<tr class="transition-colors hover:bg-neutral-50/80">
+						<td class="text-2xs px-5 py-4 font-mono whitespace-nowrap text-neutral-500">
 							{formatDateTime(logItem.created_at)}
 						</td>
-						<td class="px-4 py-3 whitespace-nowrap">
-							<div class="font-medium text-neutral-900 text-xs">{logItem.user_name}</div>
-							<span class="rounded bg-neutral-100 px-1.5 py-0.2 text-3xs font-mono text-neutral-600 uppercase">
+						<td class="px-5 py-4 whitespace-nowrap">
+							<div class="text-xs font-medium text-neutral-900">{logItem.user_name}</div>
+							<span
+								class="py-0.2 text-3xs rounded bg-neutral-100 px-1.5 font-mono text-neutral-600 uppercase"
+							>
 								{logItem.user_role}
 							</span>
 						</td>
-						<td class="px-4 py-3 whitespace-nowrap">
+						<td class="px-5 py-4 whitespace-nowrap">
 							<Badge variant={getModuleBadgeVariant(logItem.module)} size="sm">
 								{logItem.module}
 							</Badge>
-							<div class="font-mono text-3xs text-neutral-400 mt-1">{logItem.action}</div>
+							<div class="text-3xs mt-1 font-mono text-neutral-400">{logItem.action}</div>
 						</td>
-						<td class="px-4 py-3 text-xs text-neutral-700">
+						<td class="px-5 py-4 text-xs text-neutral-700">
 							{logItem.summary}
 						</td>
-						<td class="px-4 py-3 text-right whitespace-nowrap">
+						<td class="px-5 py-4 text-right whitespace-nowrap">
 							<Button
 								variant="outline"
 								size="sm"
@@ -240,7 +271,10 @@
 	{#if totalPages > 1}
 		<div class="flex items-center justify-between">
 			<span class="text-xs text-neutral-500">
-				Menampilkan {(currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, totalItems)} dari {totalItems} log aktivitas
+				Menampilkan {(currentPage - 1) * pageSize + 1} - {Math.min(
+					currentPage * pageSize,
+					totalItems
+				)} dari {totalItems} log aktivitas
 			</span>
 			<Pagination
 				page={currentPage}
@@ -266,8 +300,11 @@
 			</div>
 
 			<div>
-				<span class="text-2xs font-semibold uppercase tracking-wider text-neutral-400">Data Rinci (JSON Payload):</span>
-				<pre class="mt-1.5 max-h-96 overflow-y-auto rounded-xl border border-neutral-800 bg-neutral-950 p-4 font-mono text-2xs text-emerald-400 shadow-inner">
+				<span class="text-2xs font-semibold tracking-wider text-neutral-400 uppercase"
+					>Data Rinci (JSON Payload):</span
+				>
+				<pre
+					class="text-2xs mt-1.5 max-h-96 overflow-y-auto rounded-xl border border-neutral-800 bg-neutral-950 p-4 font-mono text-emerald-400 shadow-inner">
 {formatJsonDetails(selectedLog.details)}
 				</pre>
 			</div>
@@ -275,9 +312,7 @@
 
 		{#snippet footer()}
 			<div class="flex items-center justify-end">
-				<Button variant="primary" size="sm" onclick={() => (showDetailModal = false)}>
-					Tutup
-				</Button>
+				<Button variant="primary" size="sm" onclick={() => (showDetailModal = false)}>Tutup</Button>
 			</div>
 		{/snippet}
 	</Modal>

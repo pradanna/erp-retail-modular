@@ -49,7 +49,8 @@
 	role="status"
 	aria-live="polite"
 	transition:fly={{ y: -12, duration: 200 }}
-	class="pointer-events-auto flex w-full items-start gap-3 rounded-xl border border-neutral-200/90 border-l-4 bg-white p-3.5 shadow-lg ring-1 ring-black/5 transition-all {currentStyle.borderAccent}"
+	class="pointer-events-auto relative z-toast z-[99999] flex w-full items-start gap-3 rounded-xl border border-neutral-200/90 border-l-4 bg-white p-3.5 shadow-xl ring-1 ring-black/5 transition-all {currentStyle.borderAccent}"
+	style="z-index: 99999;"
 >
 	<!-- Icon Status Semantik (Heroicons) -->
 	<div

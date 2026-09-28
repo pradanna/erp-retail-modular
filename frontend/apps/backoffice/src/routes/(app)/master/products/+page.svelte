@@ -928,21 +928,23 @@
 		</div>
 	</div>
 
-	<!-- Bar Pencarian & Filter Cepat -->
+	<!-- Bar Pencarian & Filter Cepat (Compact) -->
 	<div
-		class="flex flex-col gap-3 rounded-xl border border-neutral-200/80 bg-white p-4 shadow-xs md:flex-row md:items-center md:justify-between"
+		class="flex flex-col gap-2.5 rounded-xl border border-neutral-200 bg-white p-3 shadow-2xs md:flex-row md:items-center md:justify-between"
 	>
-		<div class="w-full md:max-w-xs">
+		<div class="w-full md:w-64">
 			<SearchInput
+				size="sm"
 				placeholder="Cari SKU atau nama produk..."
 				value={searchQuery}
 				onsearch={handleSearch}
 			/>
 		</div>
 
-		<div class="flex flex-wrap items-center gap-3">
-			<div class="w-56">
+		<div class="flex flex-wrap items-center gap-2">
+			<div class="w-full sm:w-48">
 				<Select2
+					size="sm"
 					options={categoryFilterOptions}
 					bind:value={selectedCategoryFilter}
 					placeholder="Semua Kategori"
@@ -952,8 +954,9 @@
 				/>
 			</div>
 
-			<div class="w-48">
+			<div class="w-full sm:w-40">
 				<Select2
+					size="sm"
 					options={statusFilterOptions}
 					bind:value={selectedStatusFilter}
 					placeholder="Semua Status"

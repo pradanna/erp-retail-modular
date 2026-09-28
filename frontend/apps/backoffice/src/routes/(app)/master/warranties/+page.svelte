@@ -38,7 +38,6 @@
 		Badge,
 		SearchInput,
 		ActionMenu,
-		type ActionMenuItem,
 		toast
 	} from '@erp/ui';
 
@@ -371,17 +370,21 @@
 
 	<!-- Konten Tab 1: Template Kebijakan -->
 	{#if activeTab === 'policies'}
-		<!-- Bar Filter & Pencarian Template Garansi via Select2 -->
-		<div class="mb-4 flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-			<div class="flex flex-wrap items-center gap-3">
-				<SearchInput
-					bind:value={policySearchQuery}
-					placeholder="Cari nama template garansi atau cakupan..."
-					debounceMs={200}
-				/>
+		<!-- Bar Filter & Pencarian Template Garansi via Select2 (Compact) -->
+		<div class="mb-3 flex flex-col justify-between gap-2.5 sm:flex-row sm:items-center">
+			<div class="flex flex-wrap items-center gap-2">
+				<div class="w-full sm:w-64">
+					<SearchInput
+						size="sm"
+						bind:value={policySearchQuery}
+						placeholder="Cari nama template atau cakupan..."
+						debounceMs={200}
+					/>
+				</div>
 
-				<div class="w-60">
+				<div class="w-full sm:w-48">
 					<Select2
+						size="sm"
 						options={warrantyTypeFilterOptions}
 						bind:value={selectedWarrantyTypeFilter}
 						placeholder="Semua Tipe Garansi"
@@ -482,9 +485,10 @@
 							{/if}
 						</div>
 
-						<!-- Input Pencarian Produk -->
-						<div class="mt-3">
+						<!-- Input Pencarian Produk (Compact) -->
+						<div class="mt-2">
 							<SearchInput
+								size="sm"
 								bind:value={productSearchQuery}
 								placeholder="Cari nama, SKU, merek produk..."
 								debounceMs={150}

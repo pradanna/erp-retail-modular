@@ -41,6 +41,11 @@ import type {
   ProductImageResponse,
   StockAdjustmentResponse,
   StockAdjustmentListParams,
+  CreateStockMovementRequest,
+  StockMovementResponse,
+  StockMovementListParams,
+  StockCardReportResponse,
+  StockValuationItemResponse,
 } from '@erp/types';
 
 // ── 1. Produk ─────────────────────────────────────────────────────────────
@@ -247,6 +252,8 @@ export async function listStockAdjustments(
   const query = new URLSearchParams();
   if (params?.location_id) query.set('location_id', params.location_id);
   if (params?.product_id) query.set('product_id', params.product_id);
+  if (params?.start_date) query.set('start_date', params.start_date);
+  if (params?.end_date) query.set('end_date', params.end_date);
   if (params?.page) query.set('page', String(params.page));
   if (params?.limit) query.set('limit', String(params.limit));
 
@@ -650,6 +657,95 @@ export async function uploadCategoryImage(
     body: formData,
     token,
   });
+}
+
+// ── 11. Transaksi Barang Masuk & Keluar (Stock Movements) ──────────────────
+
+export async function createStockIn(
+  token: string,
+  req: CreateStockMovementRequest,
+): Promise<StockMovementResponse> {
+  return fetchApi<StockMovementResponse>('/api/v1/inventory/movements/in', {
+    method: 'POST',
+    body: req,
+    token,
+  });
+}
+
+export async function createStockOut(
+  token: string,
+  req: CreateStockMovementRequest,
+): Promise<StockMovementResponse> {
+  return fetchApi<StockMovementResponse>('/api/v1/inventory/movements/out', {
+    method: 'POST',
+    body: req,
+    token,
+  });
+}
+
+export async function listStockMovements(
+  token: string,
+  params?: StockMovementListParams,
+): Promise<{ data: StockMovementResponse[]; total: number; page: number; limit: number }> {
+  const q = new URLSearchParams();
+  if (params?.location_id) q.set('location_id', params.location_id);
+  if (params?.type) q.set('type', params.type);
+  if (params?.start_date) q.set('start_date', params.start_date);
+  if (params?.end_date) q.set('end_date', params.end_date);
+  if (params?.page) q.set('page', params.page.toString());
+  if (params?.limit) q.set('limit', params.limit.toString());
+  const query = q.toString();
+
+  return fetchApi<{ data: StockMovementResponse[]; total: number; page: number; limit: number }>(
+    `/api/v1/inventory/movements${query ? `?${query}` : ''}`,
+    { token },
+  );
+}
+
+export async function getStockMovementDetail(
+  token: string,
+  id: string,
+): Promise<StockMovementResponse> {
+  return fetchApi<StockMovementResponse>(`/api/v1/inventory/movements/${id}`, {
+    token,
+  });
+}
+
+// ── 12. Laporan Kartu Stok & Valuasi Persediaan ─────────────────────────────
+
+export async function getStockCardReport(
+  token: string,
+  params: {
+    product_id: string;
+    location_id: string;
+    start_date?: string;
+    end_date?: string;
+  },
+): Promise<StockCardReportResponse> {
+  const q = new URLSearchParams();
+  q.set('product_id', params.product_id);
+  q.set('location_id', params.location_id);
+  if (params.start_date) q.set('start_date', params.start_date);
+  if (params.end_date) q.set('end_date', params.end_date);
+
+  return fetchApi<StockCardReportResponse>(
+    `/api/v1/inventory/reports/stock-card?${q.toString()}`,
+    { token },
+  );
+}
+
+export async function getStockValuationReport(
+  token: string,
+  location_id?: string,
+): Promise<StockValuationItemResponse[]> {
+  const q = new URLSearchParams();
+  if (location_id) q.set('location_id', location_id);
+  const query = q.toString();
+
+  return fetchApi<StockValuationItemResponse[]>(
+    `/api/v1/inventory/reports/valuation${query ? `?${query}` : ''}`,
+    { token },
+  );
 }
 
 

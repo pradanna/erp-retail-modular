@@ -39,7 +39,6 @@
 		Badge,
 		SearchInput,
 		ActionMenu,
-		type ActionMenuItem,
 		toast
 	} from '@erp/ui';
 
@@ -186,7 +185,8 @@
 				const start = new Date(item.start_date).getTime();
 				const end = new Date(item.end_date).getTime();
 				const isCurrentlyActive = item.is_active && nowTime >= start && nowTime <= end;
-				const isQuotaExhausted = item.max_quantity != null && item.claimed_quantity >= item.max_quantity;
+				const isQuotaExhausted =
+					item.max_quantity != null && item.claimed_quantity >= item.max_quantity;
 
 				if (selectedStatusFilter === 'active') {
 					return isCurrentlyActive && !isQuotaExhausted;
@@ -444,7 +444,10 @@
 			toast.success(`Promo '${targetDeactivateItem.reason}' berhasil dinonaktifkan!`);
 			showDeactivateModal = false;
 			await loadData();
-			if (simProductId === targetDeactivateItem.product_id && simLocationId === targetDeactivateItem.location_id) {
+			if (
+				simProductId === targetDeactivateItem.product_id &&
+				simLocationId === targetDeactivateItem.location_id
+			) {
 				runSimulator();
 			}
 		} catch (err) {
@@ -475,7 +478,10 @@
 		return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 	}
 
-	function getPromoStatusBadge(item: PriceOverrideResponse): { label: string; variant: 'success' | 'warning' | 'danger' | 'default' } {
+	function getPromoStatusBadge(item: PriceOverrideResponse): {
+		label: string;
+		variant: 'success' | 'warning' | 'danger' | 'default';
+	} {
 		if (!item.is_active) {
 			return { label: 'Nonaktif', variant: 'default' };
 		}
@@ -504,53 +510,77 @@
 	<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
 		<div>
 			<div class="flex items-center gap-2">
-				<h1 class="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-50">
-					Promo Cabang
-				</h1>
+				<h1 class="text-2xl font-bold tracking-tight text-neutral-900">Promo Cabang</h1>
 				<Badge variant="indigo" size="sm">Price Override Engine</Badge>
 			</div>
-			<p class="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
-				Kelola harga jual promo spesifik per cabang ritel, kampanye flash sale berkuota, dan hitung harga efektif kasir POS secara otomatis.
+			<p class="mt-1 text-sm text-neutral-500">
+				Kelola harga jual promo spesifik per cabang ritel, kampanye flash sale berkuota, dan hitung
+				harga efektif kasir POS secara otomatis.
 			</p>
 		</div>
 
 		<div class="flex flex-wrap items-center gap-2.5">
 			<Button variant="outline" size="sm" onclick={loadData} disabled={loading}>
-				<svg class="mr-1.5 h-4 w-4 {loading ? 'animate-spin' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+				<svg
+					class="mr-1.5 h-4 w-4 {loading ? 'animate-spin' : ''}"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						stroke-width="2"
+						d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+					/>
 				</svg>
 				Refresh
 			</Button>
 
 			<Button variant="primary" size="sm" onclick={openCreateModal}>
 				<svg class="mr-1.5 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						stroke-width="2"
+						d="M12 4v16m8-8H4"
+					/>
 				</svg>
 				+ Buat Promo Cabang Baru
 			</Button>
 		</div>
 	</div>
 
-	<!-- ── Hero: Live POS Price Simulator (Kalkulator Kasir) ────────────────── -->
-	<div class="rounded-xl border border-neutral-800 bg-neutral-950 p-5 text-neutral-50 shadow-xl dark:border-neutral-800">
-		<div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6">
+	<!-- ── Hero: Live POS Price Simulator (Clean Light Card) ────────────────── -->
+	<div class="rounded-xl border border-neutral-200 bg-white p-5 shadow-2xs">
+		<div class="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
 			<!-- Form Pilihan Simulator -->
 			<div class="flex-1 space-y-4">
 				<div class="flex items-center gap-2">
-					<div class="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20">
+					<div
+						class="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200"
+					>
 						<svg class="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z"
+							/>
 						</svg>
 					</div>
 					<div>
-						<h2 class="text-base font-semibold text-white">Live POS Price Simulator</h2>
-						<p class="text-xs text-neutral-400">Simulasikan harga riil yang akan ditagihkan ke konsumen saat kasir men-scan barang di cabang terpilih.</p>
+						<h2 class="text-base font-semibold text-neutral-900">Live POS Price Simulator</h2>
+						<p class="text-xs text-neutral-500">
+							Simulasikan harga riil yang akan ditagihkan ke konsumen saat kasir men-scan barang di
+							cabang terpilih.
+						</p>
 					</div>
 				</div>
 
-				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 pt-1">
+				<div class="grid grid-cols-1 gap-3 pt-1 sm:grid-cols-2">
 					<div>
-						<label for="sim-location" class="mb-1 block text-xs font-medium text-neutral-300">
+						<label for="sim-location" class="mb-1 block text-xs font-medium text-neutral-700">
 							Pilih Cabang Kasir:
 						</label>
 						<Select2
@@ -563,7 +593,7 @@
 					</div>
 
 					<div>
-						<label for="sim-product" class="mb-1 block text-xs font-medium text-neutral-300">
+						<label for="sim-product" class="mb-1 block text-xs font-medium text-neutral-700">
 							Pilih Produk yang Di-scan:
 						</label>
 						<Select2
@@ -577,16 +607,20 @@
 				</div>
 
 				{#if simError}
-					<div class="rounded-lg border border-rose-900/50 bg-rose-950/40 p-2.5 text-xs text-rose-300">
+					<div class="rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">
 						{simError}
 					</div>
 				{/if}
 			</div>
 
 			<!-- Hasil Output Simulator Kasir POS -->
-			<div class="w-full lg:w-96 rounded-lg border border-neutral-800 bg-neutral-900 p-4 transition-all">
+			<div
+				class="w-full rounded-xl border border-neutral-200 bg-neutral-50/80 p-4 shadow-2xs transition-all lg:w-96"
+			>
 				<div class="flex items-start justify-between">
-					<div class="text-[11px] font-medium uppercase tracking-wider text-neutral-400">Harga Final di Kasir POS</div>
+					<div class="text-[11px] font-semibold tracking-wider text-neutral-500 uppercase">
+						Harga Final di Kasir POS
+					</div>
 					{#if simResult}
 						{#if simResult.has_discount}
 							<Badge variant="success">Promo Aktif</Badge>
@@ -597,42 +631,51 @@
 				</div>
 
 				{#if simLoading}
-					<div class="py-6 text-center text-xs text-neutral-400">
-						Menghitung harga efektif...
-					</div>
+					<div class="py-6 text-center text-xs text-neutral-400">Menghitung harga efektif...</div>
 				{:else if simResult}
 					<div class="mt-2">
-						<div class="text-2xl font-bold {simResult.has_discount ? 'text-emerald-400' : 'text-white'}">
+						<div
+							class="text-2xl font-bold {simResult.has_discount
+								? 'text-emerald-700'
+								: 'text-neutral-900'}"
+						>
 							{formatRupiah(simResult.effective_price)}
 						</div>
 
 						{#if simResult.has_discount}
 							<div class="mt-1 flex items-center gap-2 text-xs">
-								<span class="text-neutral-400 line-through">{formatRupiah(simResult.base_price)}</span>
-								<span class="font-semibold text-emerald-400">Hemat {formatRupiah(simResult.discount_amount)}!</span>
+								<span class="text-neutral-400 line-through"
+									>{formatRupiah(simResult.base_price)}</span
+								>
+								<span class="font-semibold text-emerald-700"
+									>Hemat {formatRupiah(simResult.discount_amount)}!</span
+								>
 							</div>
 						{/if}
 					</div>
 
-					<div class="mt-3.5 space-y-1.5 border-t border-neutral-800 pt-2.5 text-xs">
+					<div class="mt-3.5 space-y-1.5 border-t border-neutral-200 pt-2.5 text-xs">
 						{#if simResult.promo_reason}
 							<div class="flex justify-between">
-								<span class="text-neutral-400">Kampanye:</span>
-								<span class="font-medium text-neutral-200 text-right">{simResult.promo_reason}</span>
+								<span class="text-neutral-500">Kampanye:</span>
+								<span class="text-right font-medium text-neutral-900">{simResult.promo_reason}</span
+								>
 							</div>
 						{/if}
 
 						<div class="flex justify-between">
-							<span class="text-neutral-400">Status Kuota:</span>
+							<span class="text-neutral-500">Status Kuota:</span>
 							{#if simResult.remaining_quota != null}
-								<span class="font-semibold text-amber-300">Sisa {simResult.remaining_quota} unit</span>
+								<span class="font-semibold text-amber-700"
+									>Sisa {simResult.remaining_quota} unit</span
+								>
 							{:else}
-								<span class="text-neutral-300">Tanpa Batas Kuota</span>
+								<span class="text-neutral-700">Tanpa Batas Kuota</span>
 							{/if}
 						</div>
 					</div>
 				{:else}
-					<div class="py-6 text-center text-xs text-neutral-500">
+					<div class="py-6 text-center text-xs text-neutral-400">
 						Pilih cabang dan produk untuk melihat kalkulasi harga kasir.
 					</div>
 				{/if}
@@ -642,125 +685,162 @@
 
 	<!-- ── KPI Metric Cards ────────────────────────────────────────────────── -->
 	<div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-		<div class="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-			<div class="text-xs font-medium text-neutral-500 dark:text-neutral-400">Total Promo Didaftarkan</div>
-			<div class="mt-1.5 text-2xl font-bold text-neutral-900 dark:text-neutral-100">
+		<div class="rounded-xl border border-neutral-200 bg-white p-3.5 shadow-2xs">
+			<div class="text-xs font-medium text-neutral-500">Total Promo Didaftarkan</div>
+			<div class="mt-1.5 text-2xl font-bold text-neutral-900">
 				{kpiMetrics.total}
 			</div>
-			<div class="mt-1 text-[11px] text-neutral-500">Sepanjang operasional ritel</div>
+			<div class="mt-1 text-[11px] text-neutral-400">Sepanjang operasional ritel</div>
 		</div>
 
-		<div class="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 shadow-sm dark:border-emerald-950 dark:bg-emerald-950/20">
-			<div class="text-xs font-medium text-emerald-700 dark:text-emerald-400">Sedang Aktif Berjalan</div>
-			<div class="mt-1.5 text-2xl font-bold text-emerald-800 dark:text-emerald-300">
+		<div class="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3.5 shadow-2xs">
+			<div class="text-xs font-medium text-emerald-700">Sedang Aktif Berjalan</div>
+			<div class="mt-1.5 text-2xl font-bold text-emerald-800">
 				{kpiMetrics.active}
 			</div>
-			<div class="mt-1 text-[11px] text-emerald-600/80 dark:text-emerald-400/70">Dapat diklaim di kasir hari ini</div>
+			<div class="mt-1 text-[11px] text-emerald-600/80">Dapat diklaim di kasir hari ini</div>
 		</div>
 
-		<div class="rounded-xl border border-amber-200 bg-amber-50/40 p-4 shadow-sm dark:border-amber-950 dark:bg-amber-950/20">
-			<div class="text-xs font-medium text-amber-700 dark:text-amber-400">Flash Sale Berkuota</div>
-			<div class="mt-1.5 text-2xl font-bold text-amber-800 dark:text-amber-300">
+		<div class="rounded-xl border border-amber-200 bg-amber-50/50 p-3.5 shadow-2xs">
+			<div class="text-xs font-medium text-amber-700">Flash Sale Berkuota</div>
+			<div class="mt-1.5 text-2xl font-bold text-amber-800">
 				{kpiMetrics.flashSale}
 			</div>
-			<div class="mt-1 text-[11px] text-amber-600/80 dark:text-amber-400/70">Promo dengan limit unit</div>
+			<div class="mt-1 text-[11px] text-amber-600/80">Promo dengan limit unit</div>
 		</div>
 
-		<div class="rounded-xl border border-blue-200 bg-blue-50/40 p-4 shadow-sm dark:border-blue-950 dark:bg-blue-950/20">
-			<div class="text-xs font-medium text-blue-700 dark:text-blue-400">Unit Promo Terklaim</div>
-			<div class="mt-1.5 text-2xl font-bold text-blue-800 dark:text-blue-300">
+		<div class="rounded-xl border border-blue-200 bg-blue-50/50 p-3.5 shadow-2xs">
+			<div class="text-xs font-medium text-blue-700">Unit Promo Terklaim</div>
+			<div class="mt-1.5 text-2xl font-bold text-blue-800">
 				{kpiMetrics.totalClaimed}
 			</div>
-			<div class="mt-1 text-[11px] text-blue-600/80 dark:text-blue-400/70">Total barang terjual harga promo</div>
+			<div class="mt-1 text-[11px] text-blue-600/80">Total barang terjual harga promo</div>
 		</div>
 	</div>
 
-	<!-- ── Toolbar Filter & Pencarian ──────────────────────────────────────── -->
-	<div class="rounded-xl border border-neutral-200 bg-white p-4 shadow-sm dark:border-neutral-800 dark:bg-neutral-900 space-y-4">
-		<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-			<div>
-				<label for="filter-loc" class="mb-1 block text-xs font-medium text-neutral-700 dark:text-neutral-300">
-					Filter Cabang
-				</label>
+	<!-- ── Toolbar Filter & Pencarian (Compact) ───────────────────────────── -->
+	<div class="space-y-3 rounded-xl border border-neutral-200 bg-white p-3.5 shadow-2xs">
+		<!-- Baris Filter Dropdown & Search (Compact Inline) -->
+		<div class="flex flex-wrap items-center gap-2">
+			<div class="w-full sm:w-52">
 				<Select2
 					id="filter-loc"
+					size="sm"
 					bind:value={selectedLocationId}
 					options={locationOptions}
-					placeholder="Pilih cabang..."
+					placeholder="Semua Cabang"
+					searchPlaceholder="Cari cabang..."
+					clearable={true}
+					onchange={() => (currentPage = 1)}
 				/>
 			</div>
 
-			<div>
-				<label for="filter-prod" class="mb-1 block text-xs font-medium text-neutral-700 dark:text-neutral-300">
-					Filter Produk
-				</label>
+			<div class="w-full sm:w-56">
 				<Select2
 					id="filter-prod"
+					size="sm"
 					bind:value={selectedProductId}
 					options={productOptions}
-					placeholder="Pilih produk..."
+					placeholder="Semua Produk"
+					searchPlaceholder="Cari produk..."
+					clearable={true}
+					onchange={() => (currentPage = 1)}
 				/>
 			</div>
 
-			<div>
-				<label for="search-promo" class="mb-1 block text-xs font-medium text-neutral-700 dark:text-neutral-300">
-					Cari Nama Promo / Alasan
-				</label>
+			<div class="w-full sm:w-64">
 				<SearchInput
+					size="sm"
 					bind:value={searchQuery}
-					placeholder="Cari nama kampanye, SKU, produk..."
+					placeholder="Cari promo, SKU, produk..."
+					onsearch={() => (currentPage = 1)}
 				/>
 			</div>
+
+			{#if selectedLocationId || selectedProductId || searchQuery || selectedStatusFilter !== 'all'}
+				<button
+					type="button"
+					onclick={() => {
+						selectedLocationId = '';
+						selectedProductId = '';
+						searchQuery = '';
+						selectedStatusFilter = 'all';
+						currentPage = 1;
+					}}
+					class="px-2 py-1 text-xs text-neutral-500 hover:text-neutral-900 hover:underline"
+				>
+					Reset Filter
+				</button>
+			{/if}
 		</div>
 
-		<!-- Status Tabs Filter -->
-		<div class="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-3 dark:border-neutral-800">
+		<!-- Status Tabs Filter (Compact Pills) -->
+		<div
+			class="flex flex-wrap items-center justify-between gap-2.5 border-t border-neutral-100 pt-2.5"
+		>
 			<div class="flex flex-wrap items-center gap-1.5">
 				<span class="mr-1 text-xs font-medium text-neutral-500">Status:</span>
 
 				<button
 					type="button"
-					onclick={() => { selectedStatusFilter = 'all'; currentPage = 1; }}
-					class="rounded-lg px-3 py-1.5 text-xs font-medium transition {selectedStatusFilter === 'all'
-						? 'bg-neutral-900 text-white dark:bg-white dark:text-neutral-900'
-						: 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700'}"
+					onclick={() => {
+						selectedStatusFilter = 'all';
+						currentPage = 1;
+					}}
+					class="rounded-lg px-2.5 py-1 text-xs font-medium transition {selectedStatusFilter ===
+					'all'
+						? 'bg-neutral-900 text-white shadow-2xs'
+						: 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200 hover:text-neutral-900'}"
 				>
 					Semua ({kpiMetrics.total})
 				</button>
 
 				<button
 					type="button"
-					onclick={() => { selectedStatusFilter = 'active'; currentPage = 1; }}
-					class="rounded-lg px-3 py-1.5 text-xs font-medium transition {selectedStatusFilter === 'active'
-						? 'bg-emerald-600 text-white'
-						: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-400 dark:hover:bg-emerald-950/70'}"
+					onclick={() => {
+						selectedStatusFilter = 'active';
+						currentPage = 1;
+					}}
+					class="rounded-lg px-2.5 py-1 text-xs font-medium transition {selectedStatusFilter ===
+					'active'
+						? 'bg-emerald-600 text-white shadow-2xs'
+						: 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}"
 				>
 					Sedang Aktif ({kpiMetrics.active})
 				</button>
 
 				<button
 					type="button"
-					onclick={() => { selectedStatusFilter = 'exhausted'; currentPage = 1; }}
-					class="rounded-lg px-3 py-1.5 text-xs font-medium transition {selectedStatusFilter === 'exhausted'
-						? 'bg-amber-600 text-white'
-						: 'bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-400 dark:hover:bg-amber-950/70'}"
+					onclick={() => {
+						selectedStatusFilter = 'exhausted';
+						currentPage = 1;
+					}}
+					class="rounded-lg px-2.5 py-1 text-xs font-medium transition {selectedStatusFilter ===
+					'exhausted'
+						? 'bg-amber-600 text-white shadow-2xs'
+						: 'bg-amber-50 text-amber-700 hover:bg-amber-100'}"
 				>
 					Kuota Habis
 				</button>
 
 				<button
 					type="button"
-					onclick={() => { selectedStatusFilter = 'inactive'; currentPage = 1; }}
-					class="rounded-lg px-3 py-1.5 text-xs font-medium transition {selectedStatusFilter === 'inactive'
-						? 'bg-neutral-700 text-white'
-						: 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700'}"
+					onclick={() => {
+						selectedStatusFilter = 'inactive';
+						currentPage = 1;
+					}}
+					class="rounded-lg px-2.5 py-1 text-xs font-medium transition {selectedStatusFilter ===
+					'inactive'
+						? 'bg-neutral-700 text-white shadow-2xs'
+						: 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200 hover:text-neutral-900'}"
 				>
 					Kadaluarsa / Nonaktif ({kpiMetrics.expiredOrInactive})
 				</button>
 			</div>
 
 			<div class="text-xs text-neutral-500">
-				Menampilkan <span class="font-semibold text-neutral-900 dark:text-white">{filteredOverrides.length}</span> promo
+				Menampilkan <span class="font-semibold text-neutral-900">{filteredOverrides.length}</span>
+				promo
 			</div>
 		</div>
 	</div>
@@ -773,27 +853,39 @@
 	{/if}
 
 	<!-- ── Tabel Daftar Promo Cabang ──────────────────────────────────────── -->
-	<div class="rounded-xl border border-neutral-200 bg-white shadow-sm dark:border-neutral-800 dark:bg-neutral-900">
-		<Table>
-			<thead>
+	<div class="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-2xs">
+		<Table borderless>
+			<thead
+				class="border-b border-neutral-200 bg-neutral-50/75 text-left text-xs font-semibold text-neutral-600"
+			>
 				<tr>
-					<th>Kampanye & Alasan</th>
-					<th>Produk & SKU</th>
-					<th>Cabang Berlaku</th>
-					<th>Harga Promo & Diskon</th>
-					<th>Kuota & Klaim</th>
-					<th>Periode Berlaku</th>
-					<th>Status</th>
-					<th class="text-right">Aksi</th>
+					<th class="px-5 py-3.5">Kampanye & Alasan</th>
+					<th class="px-5 py-3.5">Produk & SKU</th>
+					<th class="px-5 py-3.5">Cabang Berlaku</th>
+					<th class="px-5 py-3.5">Harga Promo & Diskon</th>
+					<th class="px-5 py-3.5">Kuota & Klaim</th>
+					<th class="px-5 py-3.5">Periode Berlaku</th>
+					<th class="px-5 py-3.5 text-center">Status</th>
+					<th class="px-5 py-3.5 text-right">Aksi</th>
 				</tr>
 			</thead>
-			<tbody>
+			<tbody class="divide-y divide-neutral-200 bg-white text-xs">
 				{#if loading}
 					<tr>
-						<td colspan="8" class="py-12 text-center">
+						<td colspan="8" class="px-5 py-12 text-center">
 							<div class="flex flex-col items-center justify-center gap-2">
-								<svg class="h-6 w-6 animate-spin text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+								<svg
+									class="h-6 w-6 animate-spin text-neutral-400"
+									fill="none"
+									viewBox="0 0 24 24"
+									stroke="currentColor"
+								>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+									/>
 								</svg>
 								<span class="text-xs text-neutral-500">Memuat daftar promo cabang...</span>
 							</div>
@@ -801,13 +893,28 @@
 					</tr>
 				{:else if paginatedOverrides.length === 0}
 					<tr>
-						<td colspan="8" class="py-12 text-center">
-							<div class="flex flex-col items-center justify-center gap-2 text-neutral-500 dark:text-neutral-400">
-								<svg class="h-10 w-10 text-neutral-300 dark:text-neutral-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3zM6 6h.008v.008H6V6z" />
+						<td colspan="8" class="px-5 py-12 text-center">
+							<div class="flex flex-col items-center justify-center gap-2 text-neutral-500">
+								<svg
+									class="h-10 w-10 text-neutral-300"
+									fill="none"
+									viewBox="0 0 24 24"
+									stroke="currentColor"
+								>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="1.5"
+										d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3zM6 6h.008v.008H6V6z"
+									/>
 								</svg>
-								<div class="text-sm font-medium text-neutral-700 dark:text-neutral-300">Belum ada promo yang sesuai kriteria</div>
-								<div class="text-xs">Klik tombol "+ Buat Promo Cabang Baru" untuk menambahkan promo harga khusus pertama.</div>
+								<div class="text-sm font-medium text-neutral-700">
+									Belum ada promo yang sesuai kriteria
+								</div>
+								<div class="text-xs text-neutral-400">
+									Klik tombol "+ Buat Promo Cabang Baru" untuk menambahkan promo harga khusus
+									pertama.
+								</div>
 							</div>
 						</td>
 					</tr>
@@ -818,23 +925,23 @@
 						{@const discount = base - item.promotional_price}
 						{@const discountPct = base > 0 ? Math.round((discount / base) * 100) : 0}
 
-						<tr class="hover:bg-neutral-50/60 dark:hover:bg-neutral-800/40 transition">
+						<tr class="transition-colors hover:bg-neutral-50/80">
 							<!-- Kampanye / Alasan Promo -->
-							<td>
-								<div class="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+							<td class="px-5 py-4">
+								<div class="text-sm font-semibold text-neutral-900">
 									{item.reason || 'Promo Khusus Cabang'}
 								</div>
-								<div class="text-[11px] font-mono text-neutral-400">
+								<div class="font-mono text-[11px] text-neutral-400">
 									ID: {item.id.slice(0, 8)}...
 								</div>
 							</td>
 
 							<!-- Produk & SKU -->
-							<td>
-								<div class="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+							<td class="px-5 py-4">
+								<div class="text-sm font-medium text-neutral-900">
 									{item.product_name ?? 'Produk'}
 								</div>
-								<div class="mt-0.5 flex items-center gap-1.5 text-xs text-neutral-500">
+								<div class="mt-1 flex items-center gap-1.5 text-xs text-neutral-500">
 									<Badge variant="indigo" size="sm">
 										<span class="font-mono">{item.product_sku ?? item.product_id}</span>
 									</Badge>
@@ -845,24 +952,24 @@
 							</td>
 
 							<!-- Cabang Berlaku -->
-							<td>
-								<div class="text-sm text-neutral-800 dark:text-neutral-200">
+							<td class="px-5 py-4">
+								<div class="text-sm font-medium text-neutral-800">
 									{item.location_name ?? 'Semua Cabang'}
 								</div>
 								{#if item.location_code}
-									<div class="text-[11px] font-mono text-neutral-400">
+									<div class="font-mono text-[11px] text-neutral-400">
 										Kode: {item.location_code}
 									</div>
 								{/if}
 							</td>
 
 							<!-- Harga Promo & Diskon -->
-							<td>
-								<div class="font-bold text-emerald-600 dark:text-emerald-400">
+							<td class="px-5 py-4">
+								<div class="font-bold text-emerald-600">
 									{formatRupiah(item.promotional_price)}
 								</div>
 								{#if discount > 0}
-									<div class="mt-0.5 flex items-center gap-1.5 text-xs">
+									<div class="mt-1 flex items-center gap-1.5 text-xs">
 										<span class="text-neutral-400 line-through">{formatRupiah(base)}</span>
 										<Badge variant="danger" size="sm">-{discountPct}%</Badge>
 									</div>
@@ -870,18 +977,23 @@
 							</td>
 
 							<!-- Kuota & Klaim -->
-							<td>
+							<td class="px-5 py-4">
 								{#if item.max_quantity != null}
 									<div class="text-xs">
 										<div class="flex justify-between font-medium">
 											<span>{item.claimed_quantity} / {item.max_quantity} unit</span>
-											<span class="text-neutral-400">{Math.round((item.claimed_quantity / item.max_quantity) * 100)}%</span>
+											<span class="text-neutral-400"
+												>{Math.round((item.claimed_quantity / item.max_quantity) * 100)}%</span
+											>
 										</div>
 										<!-- Mini progress bar -->
-										<div class="mt-1 h-1.5 w-28 rounded-full bg-neutral-100 dark:bg-neutral-800 overflow-hidden">
+										<div class="mt-1.5 h-1.5 w-28 overflow-hidden rounded-full bg-neutral-100">
 											<div
-												class="h-full bg-indigo-500 rounded-full"
-												style="width: {Math.min(100, Math.round((item.claimed_quantity / item.max_quantity) * 100))}%"
+												class="h-full rounded-full bg-indigo-500"
+												style="width: {Math.min(
+													100,
+													Math.round((item.claimed_quantity / item.max_quantity) * 100)
+												)}%"
 											></div>
 										</div>
 									</div>
@@ -894,18 +1006,18 @@
 							</td>
 
 							<!-- Periode Berlaku -->
-							<td class="text-xs text-neutral-600 dark:text-neutral-400">
+							<td class="px-5 py-4 text-xs text-neutral-600">
 								<div>{formatDate(item.start_date)}</div>
 								<div class="text-neutral-400">s/d {formatDate(item.end_date)}</div>
 							</td>
 
 							<!-- Status Badge -->
-							<td>
+							<td class="px-5 py-4 text-center">
 								<Badge variant={stBadge.variant}>{stBadge.label}</Badge>
 							</td>
 
 							<!-- Aksi Dropdown -->
-							<td class="text-right whitespace-nowrap">
+							<td class="px-5 py-4 text-right whitespace-nowrap">
 								<ActionMenu
 									items={[
 										{
@@ -935,7 +1047,7 @@
 
 		<!-- Pagination Footer -->
 		{#if filteredOverrides.length > 0}
-			<div class="border-t border-neutral-200 p-4 dark:border-neutral-800">
+			<div class="border-t border-neutral-200 bg-neutral-50/30 px-5 py-3.5">
 				<Pagination
 					page={currentPage}
 					{totalPages}
@@ -949,16 +1061,13 @@
 </div>
 
 <!-- ── Modal: Buat Promo Cabang Baru ────────────────────────────────────────── -->
-<Modal
-	bind:open={showCreateModal}
-	title="Buat Promo & Harga Khusus Cabang Baru"
-	size="xl"
->
+<Modal bind:open={showCreateModal} title="Buat Promo & Harga Khusus Cabang Baru" size="xl">
 	<div class="space-y-4">
-		<div class="rounded-lg bg-neutral-50 p-3 text-xs text-neutral-600 dark:bg-neutral-800/60 dark:text-neutral-300">
-			<div class="font-semibold text-neutral-800 dark:text-neutral-100">Prinsip Invariant Anti-Tabrakan Promo:</div>
+		<div class="rounded-lg bg-neutral-50 p-3 text-xs text-neutral-600">
+			<div class="font-semibold text-neutral-800">Prinsip Invariant Anti-Tabrakan Promo:</div>
 			<p class="mt-0.5">
-				Sistem ERP menjamin bahwa satu produk pada cabang yang sama hanya dapat memiliki satu promo aktif di rentang waktu yang bersamaan.
+				Sistem ERP menjamin bahwa satu produk pada cabang yang sama hanya dapat memiliki satu promo
+				aktif di rentang waktu yang bersamaan.
 			</p>
 		</div>
 
@@ -970,7 +1079,7 @@
 
 		<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 			<div>
-				<label for="create-location" class="mb-1 block text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+				<label for="create-location" class="mb-1 block text-xs font-semibold text-neutral-800">
 					Cabang / Toko Berlaku <span class="text-rose-500">*</span>
 				</label>
 				<Select2
@@ -982,7 +1091,7 @@
 			</div>
 
 			<div>
-				<label for="create-product" class="mb-1 block text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+				<label for="create-product" class="mb-1 block text-xs font-semibold text-neutral-800">
 					Produk yang Dipromokan <span class="text-rose-500">*</span>
 				</label>
 				<Select2
@@ -997,7 +1106,7 @@
 		<!-- Input Harga Promo & Live Calculation Preview -->
 		<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 			<div>
-				<label for="create-price" class="mb-1 block text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+				<label for="create-price" class="mb-1 block text-xs font-semibold text-neutral-800">
 					Harga Jual Promo (Rp) <span class="text-rose-500">*</span>
 				</label>
 				<Input
@@ -1012,14 +1121,16 @@
 
 			<div class="flex flex-col justify-end">
 				{#if formDiscountPreview}
-					<div class="rounded-lg border border-neutral-200 bg-neutral-50 p-2.5 text-xs dark:border-neutral-800 dark:bg-neutral-800/40">
+					<div class="rounded-lg border border-neutral-200 bg-neutral-50 p-2.5 text-xs">
 						<div class="flex justify-between">
 							<span class="text-neutral-500">Harga Normal:</span>
-							<span class="font-medium text-neutral-700 dark:text-neutral-300">{formatRupiah(formDiscountPreview.basePrice)}</span>
+							<span class="font-medium text-neutral-700"
+								>{formatRupiah(formDiscountPreview.basePrice)}</span
+							>
 						</div>
-						<div class="flex justify-between mt-1">
+						<div class="mt-1 flex justify-between">
 							<span class="text-neutral-500">Potongan Diskon:</span>
-							<span class="font-bold text-emerald-600 dark:text-emerald-400">
+							<span class="font-bold text-emerald-600">
 								{formatRupiah(formDiscountPreview.discountAmount)} (-{formDiscountPreview.discountPct}%)
 							</span>
 						</div>
@@ -1029,7 +1140,7 @@
 		</div>
 
 		<!-- Opsi Kuota Flash Sale -->
-		<div class="rounded-lg border border-neutral-200 p-3 dark:border-neutral-800 space-y-3">
+		<div class="space-y-3 rounded-lg border border-neutral-200 p-3">
 			<div class="flex items-center gap-2">
 				<input
 					type="checkbox"
@@ -1037,14 +1148,14 @@
 					bind:checked={isQuotaLimited}
 					class="h-4 w-4 rounded border-neutral-300 text-indigo-600 focus:ring-indigo-500"
 				/>
-				<label for="toggle-quota" class="text-xs font-semibold text-neutral-800 dark:text-neutral-200 cursor-pointer">
+				<label for="toggle-quota" class="cursor-pointer text-xs font-semibold text-neutral-800">
 					Batasi Kuota Promo (Flash Sale Berkuota)
 				</label>
 			</div>
 
 			{#if isQuotaLimited}
 				<div>
-					<label for="create-max-qty" class="mb-1 block text-xs text-neutral-600 dark:text-neutral-400">
+					<label for="create-max-qty" class="mb-1 block text-xs text-neutral-600">
 						Maksimal Kuantitas Promo yang Dapat Terjual (Unit):
 					</label>
 					<Input
@@ -1054,7 +1165,8 @@
 						placeholder="Contoh: 20"
 					/>
 					<p class="mt-1 text-[11px] text-neutral-500">
-						Setelah kuota ini tercapai di kasir, sistem POS akan otomatis mengembalikan harga ke harga normal.
+						Setelah kuota ini tercapai di kasir, sistem POS akan otomatis mengembalikan harga ke
+						harga normal.
 					</p>
 				</div>
 			{/if}
@@ -1063,33 +1175,33 @@
 		<!-- Rentang Waktu Promo -->
 		<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 			<div>
-				<label for="create-start-date" class="mb-1 block text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+				<label for="create-start-date" class="mb-1 block text-xs font-semibold text-neutral-800">
 					Waktu Dimulai <span class="text-rose-500">*</span>
 				</label>
 				<input
 					type="datetime-local"
 					id="create-start-date"
 					bind:value={newStartDate}
-					class="w-full rounded-lg border border-neutral-300 bg-white p-2.5 text-xs text-neutral-900 transition focus:border-neutral-900 focus:outline-none dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
+					class="w-full rounded-lg border border-neutral-300 bg-white p-2.5 text-xs text-neutral-900 transition focus:border-neutral-900 focus:outline-hidden"
 				/>
 			</div>
 
 			<div>
-				<label for="create-end-date" class="mb-1 block text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+				<label for="create-end-date" class="mb-1 block text-xs font-semibold text-neutral-800">
 					Waktu Berakhir <span class="text-rose-500">*</span>
 				</label>
 				<input
 					type="datetime-local"
 					id="create-end-date"
 					bind:value={newEndDate}
-					class="w-full rounded-lg border border-neutral-300 bg-white p-2.5 text-xs text-neutral-900 transition focus:border-neutral-900 focus:outline-none dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
+					class="w-full rounded-lg border border-neutral-300 bg-white p-2.5 text-xs text-neutral-900 transition focus:border-neutral-900 focus:outline-hidden"
 				/>
 			</div>
 		</div>
 
 		<!-- Alasan / Nama Kampanye -->
 		<div>
-			<label for="create-reason" class="mb-1 block text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+			<label for="create-reason" class="mb-1 block text-xs font-semibold text-neutral-800">
 				Nama Kampanye / Alasan Promo <span class="text-rose-500">*</span>
 			</label>
 			<Input
@@ -1113,12 +1225,7 @@
 				Batal
 			</Button>
 
-			<Button
-				variant="primary"
-				size="sm"
-				loading={createSubmitting}
-				onclick={handleCreateSubmit}
-			>
+			<Button variant="primary" size="sm" loading={createSubmitting} onclick={handleCreateSubmit}>
 				Simpan Promo
 			</Button>
 		</div>
@@ -1126,29 +1233,28 @@
 </Modal>
 
 <!-- ── Modal: Konfirmasi Nonaktifkan Promo ───────────────────────────────────── -->
-<Modal
-	bind:open={showDeactivateModal}
-	title="Nonaktifkan Promo Cabang"
-	size="md"
->
+<Modal bind:open={showDeactivateModal} title="Nonaktifkan Promo Cabang" size="md">
 	{#if targetDeactivateItem}
 		<div class="space-y-3">
-			<p class="text-sm text-neutral-600 dark:text-neutral-300">
-				Apakah Anda yakin ingin menonaktifkan kampanye promo:
-			</p>
-			<div class="rounded-lg border border-neutral-200 bg-neutral-50 p-3 dark:border-neutral-800 dark:bg-neutral-800/40">
-				<div class="font-semibold text-neutral-900 dark:text-white">
+			<p class="text-sm text-neutral-600">Apakah Anda yakin ingin menonaktifkan kampanye promo:</p>
+			<div class="rounded-lg border border-neutral-200 bg-neutral-50 p-3">
+				<div class="font-semibold text-neutral-900">
 					{targetDeactivateItem.reason}
 				</div>
 				<div class="mt-1 text-xs text-neutral-500">
-					Produk: <span class="font-medium text-neutral-700 dark:text-neutral-300">{targetDeactivateItem.product_name}</span>
+					Produk: <span class="font-medium text-neutral-700"
+						>{targetDeactivateItem.product_name}</span
+					>
 				</div>
 				<div class="text-xs text-neutral-500">
-					Cabang: <span class="font-medium text-neutral-700 dark:text-neutral-300">{targetDeactivateItem.location_name}</span>
+					Cabang: <span class="font-medium text-neutral-700"
+						>{targetDeactivateItem.location_name}</span
+					>
 				</div>
 			</div>
 			<p class="text-xs text-neutral-500">
-				Setelah dinonaktifkan, kasir POS di cabang tersebut akan langsung menagihkan harga jual normal standar.
+				Setelah dinonaktifkan, kasir POS di cabang tersebut akan langsung menagihkan harga jual
+				normal standar.
 			</p>
 		</div>
 	{/if}

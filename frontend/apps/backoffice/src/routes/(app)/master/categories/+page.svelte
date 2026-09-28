@@ -299,16 +299,6 @@
 		return result;
 	});
 
-	// Menghitung kedalaman tingkat pohon maksimal
-	const maxTreeDepth = $derived.by((): number => {
-		if (categoryTree.length === 0) return 0;
-		function getDepth(node: CategoryTreeNode): number {
-			if (node.children.length === 0) return node.level;
-			return Math.max(...node.children.map(getDepth));
-		}
-		return Math.max(...categoryTree.map(getDepth));
-	});
-
 	// Opsi dropdown kategori induk untuk Select2
 	const parentOptions = $derived((): Select2Option[] => {
 		const opts: Select2Option[] = [
@@ -710,7 +700,9 @@
 		<!-- Total Kategori -->
 		<div class="rounded-xl border border-neutral-200/80 bg-white p-4 shadow-xs">
 			<div class="flex items-center justify-between">
-				<span class="text-xs font-medium tracking-wider text-neutral-500 uppercase">Total Kategori</span>
+				<span class="text-xs font-medium tracking-wider text-neutral-500 uppercase"
+					>Total Kategori</span
+				>
 				<span class="rounded-lg bg-neutral-100 p-2 text-neutral-700">
 					<!-- Heroicons Squares2X2 20x20 -->
 					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -732,7 +724,8 @@
 		<!-- Kategori Utama -->
 		<div class="rounded-xl border border-neutral-200/80 bg-white p-4 shadow-xs">
 			<div class="flex items-center justify-between">
-				<span class="text-xs font-medium tracking-wider text-sky-600 uppercase">Kategori Utama</span>
+				<span class="text-xs font-medium tracking-wider text-sky-600 uppercase">Kategori Utama</span
+				>
 				<span class="rounded-lg bg-sky-50 p-2 text-sky-600">
 					<!-- Heroicons Folder 20x20 -->
 					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -754,7 +747,9 @@
 		<!-- Sub-Kategori -->
 		<div class="rounded-xl border border-neutral-200/80 bg-white p-4 shadow-xs">
 			<div class="flex items-center justify-between">
-				<span class="text-xs font-medium tracking-wider text-purple-600 uppercase">Sub-Kategori</span>
+				<span class="text-xs font-medium tracking-wider text-purple-600 uppercase"
+					>Sub-Kategori</span
+				>
 				<span class="rounded-lg bg-purple-50 p-2 text-purple-600">
 					<!-- Heroicons ListBullet 20x20 -->
 					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -829,14 +824,14 @@
 
 	<!-- TAB 1: DAFTAR TABEL -->
 	{#if activeTab === 'table'}
-
-		<!-- Bar Filter & Pencarian (1-Row Flex Sejajar) -->
+		<!-- Bar Filter & Pencarian (1-Row Flex Sejajar - Compact) -->
 		<div
-			class="flex flex-col gap-3 rounded-xl border border-neutral-200/80 bg-white p-4 shadow-xs md:flex-row md:items-center md:justify-between"
+			class="flex flex-col gap-2.5 rounded-xl border border-neutral-200 bg-white p-3 shadow-2xs md:flex-row md:items-center md:justify-between"
 		>
-			<div class="flex flex-1 flex-wrap items-center gap-3">
-				<div class="w-full sm:w-72">
+			<div class="flex flex-1 flex-wrap items-center gap-2">
+				<div class="w-full sm:w-64">
 					<SearchInput
+						size="sm"
 						bind:value={searchQuery}
 						placeholder="Cari nama kategori..."
 						debounceMs={200}
@@ -845,8 +840,9 @@
 				</div>
 
 				<!-- Filter Hierarki via Select2 -->
-				<div class="w-full sm:w-64">
+				<div class="w-full sm:w-48">
 					<Select2
+						size="sm"
 						options={hierarchyFilterOptions}
 						bind:value={selectedHierarchyFilter}
 						placeholder="Semua Hierarki"
@@ -1005,7 +1001,6 @@
 
 	<!-- TAB 2: HIERARKI TREE -->
 	{#if activeTab === 'tree'}
-
 		<!-- Toolbar Kontrol Pohon & Pencarian -->
 		<div
 			class="flex flex-col justify-between gap-3 rounded-xl border border-neutral-200 bg-white p-4 shadow-2xs sm:flex-row sm:items-center"
@@ -1137,7 +1132,8 @@
 					</div>
 					{#if searchQuery}
 						<span class="text-xs text-neutral-500">
-							Menampilkan <strong class="text-neutral-800">{filteredCategoryTree.length}</strong> pohon kategori utama
+							Menampilkan <strong class="text-neutral-800">{filteredCategoryTree.length}</strong> pohon
+							kategori utama
 						</span>
 					{/if}
 				</div>
@@ -1263,7 +1259,7 @@
 					ondragleave={handleDragLeave}
 					ondrop={handleDrop}
 					class="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-all focus:ring-2 focus:ring-primary-500/20 focus:outline-hidden {isDragging
-						? 'border-primary-500 bg-primary-50/40 ring-4 ring-primary-500/10 scale-[1.005]'
+						? 'scale-[1.005] border-primary-500 bg-primary-50/40 ring-4 ring-primary-500/10'
 						: 'border-neutral-300 bg-neutral-50/50 hover:border-neutral-400 hover:bg-neutral-50'}"
 				>
 					{#if uploadingImage}
@@ -1287,7 +1283,7 @@
 						<div class="pointer-events-none flex flex-col items-center justify-center">
 							<div
 								class="flex h-10 w-10 items-center justify-center rounded-xl border border-neutral-200 bg-white {isDragging
-									? 'text-primary-600 scale-110'
+									? 'scale-110 text-primary-600'
 									: 'text-neutral-500'} shadow-2xs transition-all"
 							>
 								<!-- Heroicons Photo 20x20 -->
@@ -1305,8 +1301,14 @@
 									/>
 								</svg>
 							</div>
-							<p class="mt-2.5 text-xs font-semibold {isDragging ? 'text-primary-700' : 'text-neutral-800'}">
-								{isDragging ? 'Lepaskan berkas gambar di sini...' : 'Klik atau seret gambar ke sini untuk mengunggah'}
+							<p
+								class="mt-2.5 text-xs font-semibold {isDragging
+									? 'text-primary-700'
+									: 'text-neutral-800'}"
+							>
+								{isDragging
+									? 'Lepaskan berkas gambar di sini...'
+									: 'Klik atau seret gambar ke sini untuk mengunggah'}
 							</p>
 							<p class="mt-0.5 text-[11px] text-neutral-400">
 								Format didukung: JPG, PNG, WebP (Maksimal 5 MB)

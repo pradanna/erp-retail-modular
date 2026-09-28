@@ -22,9 +22,6 @@
 	<title>ERP Retail — Backoffice</title>
 </svelte:head>
 
-<!-- Wadah Notifikasi Melayang Global (Toast) -->
-<ToastContainer />
-
 {#if !initialized || isLoading()}
 	<!-- Loading screen saat inisialisasi auth -->
 	<div class="flex h-screen items-center justify-center bg-neutral-50">
@@ -38,3 +35,6 @@
 {:else}
 	{@render children()}
 {/if}
+
+<!-- Wadah Notifikasi Melayang Global (Toast) selalu dirender di urutan DOM terluar/terbawah -->
+<ToastContainer />

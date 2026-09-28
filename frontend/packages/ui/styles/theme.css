@@ -124,4 +124,11 @@
   --radius-md: 0.5rem;
   --radius-lg: 0.75rem;
   --radius-xl: 1rem;
+
+  /* ── Z-Index Layers ─────────────────────────────────────────────────── */
+  --z-toast: 99999;
+}
+
+@utility z-toast {
+  z-index: 99999;
 }
